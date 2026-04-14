@@ -1,0 +1,190 @@
+"""Prediction Tracker — log race predictions and track accuracy."""
+
+import json
+import os
+import streamlit as st
+import pandas as pd
+from datetime import datetime
+
+from db.schema import init_db
+from db.connection import get_db
+from queries.standings import get_available_seasons, get_rounds_for_season
+from config import PLOTLY_TEMPLATE
+
+init_db()
+
+st.title("Prediction Tracker")
+st.markdown("Log your predictions before each race and see how accurate you are!")
+
+PREDICTIONS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "predictions.json")
+
+
+def load_predictions() -> dict:
+    if os.path.exists(PREDICTIONS_FILE):
+        with open(PREDICTIONS_FILE) as f:
+            return json.load(f)
+    return {}
+
+
+def save_predictions(data: dict):
+    with open(PREDICTIONS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def get_drivers_for_season(season: int) -> list[str]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT d.given_name || ' ' || d.family_name as name
+            FROM results res
+            JOIN drivers d ON res.driver_id = d.driver_id
+            JOIN races r ON res.race_id = r.race_id
+            WHERE r.season = ?
+            ORDER BY d.family_name
+            """,
+            (season,),
+        ).fetchall()
+    return [r["name"] for r in rows]
+
+
+def get_actual_result(season: int, round_num: int) -> dict | None:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT res.position, d.given_name || ' ' || d.family_name as driver
+            FROM results res
+            JOIN races r ON res.race_id = r.race_id
+            JOIN drivers d ON res.driver_id = d.driver_id
+            WHERE r.season = ? AND r.round = ? AND res.position IS NOT NULL
+            ORDER BY res.position
+            LIMIT 3
+            """,
+            (season, round_num),
+        ).fetchall()
+    if not rows:
+        return None
+    return {
+        "p1": rows[0]["driver"] if len(rows) > 0 else None,
+        "p2": rows[1]["driver"] if len(rows) > 1 else None,
+        "p3": rows[2]["driver"] if len(rows) > 2 else None,
+    }
+
+
+seasons = get_available_seasons()
+if not seasons:
+    st.warning("No data loaded.")
+    st.stop()
+
+predictions = load_predictions()
+
+tab1, tab2 = st.tabs(["Make Predictions", "Track Accuracy"])
+
+with tab1:
+    st.subheader("Log a Prediction")
+
+    season = st.selectbox("Season", seasons, key="pred_season")
+    rounds = get_rounds_for_season(season)
+    if not rounds:
+        st.warning("No races found.")
+        st.stop()
+
+    round_opts = {f"R{r['round']}: {r['race_name']}": r["round"] for r in rounds}
+    selected = st.selectbox("Race", list(round_opts.keys()), key="pred_race")
+    round_num = round_opts[selected]
+
+    drivers = get_drivers_for_season(season)
+    if not drivers:
+        st.info("No driver data for this season.")
+        st.stop()
+
+    key = f"{season}_{round_num}"
+    existing = predictions.get(key)
+
+    if existing:
+        st.success(f"You already predicted: P1: {existing.get('p1')}, P2: {existing.get('p2')}, P3: {existing.get('p3')}")
+        if st.button("Clear prediction"):
+            del predictions[key]
+            save_predictions(predictions)
+            st.rerun()
+    else:
+        st.markdown("**Predict the podium:**")
+        col1, col2, col3 = st.columns(3)
+        p1 = col1.selectbox("P1 (Winner)", drivers, key="p1")
+        p2 = col2.selectbox("P2", [d for d in drivers if d != p1], key="p2")
+        remaining = [d for d in drivers if d not in (p1, p2)]
+        p3 = col3.selectbox("P3", remaining, key="p3")
+
+        if st.button("Save Prediction", type="primary"):
+            predictions[key] = {
+                "season": season,
+                "round": round_num,
+                "race": selected.split(": ", 1)[1],
+                "p1": p1,
+                "p2": p2,
+                "p3": p3,
+                "timestamp": datetime.now().isoformat(),
+            }
+            save_predictions(predictions)
+            st.success("Prediction saved!")
+            st.rerun()
+
+with tab2:
+    st.subheader("Prediction Accuracy")
+
+    if not predictions:
+        st.info("No predictions logged yet. Go make some!")
+        st.stop()
+
+    results = []
+    for key, pred in predictions.items():
+        actual = get_actual_result(pred["season"], pred["round"])
+        score = 0
+        details = {"Race": pred.get("race", key), "Season": pred["season"]}
+
+        details["Pred P1"] = pred["p1"]
+        details["Pred P2"] = pred["p2"]
+        details["Pred P3"] = pred["p3"]
+
+        if actual:
+            details["Actual P1"] = actual["p1"]
+            details["Actual P2"] = actual["p2"]
+            details["Actual P3"] = actual["p3"]
+
+            # Scoring: 3 points for exact position, 1 point for on podium but wrong spot
+            predicted_podium = {pred["p1"], pred["p2"], pred["p3"]}
+            actual_podium_list = [actual["p1"], actual["p2"], actual["p3"]]
+
+            for i, pos in enumerate(["p1", "p2", "p3"], 1):
+                if pred[pos] == actual[pos]:
+                    score += 3  # Exact position match
+                elif pred[pos] in actual_podium_list:
+                    score += 1  # Right driver, wrong position
+
+            details["Score"] = f"{score}/9"
+        else:
+            details["Actual P1"] = "—"
+            details["Actual P2"] = "—"
+            details["Actual P3"] = "—"
+            details["Score"] = "Pending"
+
+        results.append(details)
+
+    results_df = pd.DataFrame(results)
+    st.dataframe(results_df, hide_index=True, use_container_width=True)
+
+    # Overall accuracy
+    scored = [r for r in results if r["Score"] != "Pending"]
+    if scored:
+        total_score = sum(int(r["Score"].split("/")[0]) for r in scored)
+        max_score = len(scored) * 9
+        accuracy = 100 * total_score / max_score if max_score > 0 else 0
+
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Predictions Made", len(scored))
+        col2.metric("Total Score", f"{total_score}/{max_score}")
+        col3.metric("Accuracy", f"{accuracy:.1f}%")
+
+        # Perfect predictions
+        perfect = sum(1 for r in scored if r["Score"] == "9/9")
+        if perfect > 0:
+            st.success(f"Perfect predictions: {perfect}")

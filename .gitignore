@@ -1,0 +1,7 @@
+f1_data.db
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+predictions.json
