@@ -47,32 +47,78 @@ def grid_vs_finish_chart(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def _laptime_to_seconds(t) -> float | None:
+    """Parse "M:SS.mmm" lap-time strings into seconds. Returns None on parse failure."""
+    if pd.isna(t):
+        return None
+    try:
+        mins, rest = str(t).split(":", 1)
+        return int(mins) * 60 + float(rest)
+    except (ValueError, AttributeError):
+        return None
+
+
 def fastest_laps_chart(df: pd.DataFrame) -> go.Figure:
-    """Horizontal bar chart of fastest lap times."""
+    """Gap-to-fastest visualization: each driver as a horizontal bar showing
+    how far behind the session's fastest lap they were, in seconds.
+
+    The pole-sitter is at 0 (a marker, not a zero-width bar), and the spread
+    of bars reveals true pace differences instead of just re-stating the rank.
+    Bars are coloured by constructor.
+    """
     if df.empty:
         return go.Figure()
 
     df = df.copy()
     df["driver"] = df["code"].fillna(df["family_name"])
-    fl = df[df["fastest_lap_time"].notna()].copy()
-    fl = fl.sort_values("fastest_lap_rank")
+    df["lap_seconds"] = df["fastest_lap_time"].apply(_laptime_to_seconds)
+    fl = df[df["lap_seconds"].notna()].copy()
+    if fl.empty:
+        return go.Figure().update_layout(
+            template=PLOTLY_TEMPLATE,
+            title="No fastest-lap data for this race",
+        )
 
-    colors = ["#E8002D" if r == 1 else "#3671C6" for r in fl["fastest_lap_rank"]]
+    fastest = fl["lap_seconds"].min()
+    fl["delta"] = fl["lap_seconds"] - fastest
+    # Sort fastest-first; with autorange='reversed' on the y-axis, fastest
+    # ends up at the top.
+    fl = fl.sort_values("delta")
+
+    colors = [_team_color(cid) for cid in fl["constructor_id"]]
 
     fig = go.Figure(go.Bar(
         y=fl["driver"],
-        x=fl["fastest_lap_rank"],
+        x=fl["delta"],
         orientation="h",
-        marker_color=colors,
-        text=fl["fastest_lap_time"],
-        textposition="auto",
-        hovertemplate="%{y}: %{text}<extra></extra>",
+        marker=dict(color=colors, line=dict(color="#0A0B0F", width=0.5)),
+        text=[
+            f"{t}" if d == 0 else f"+{d:.3f}s"
+            for d, t in zip(fl["delta"], fl["fastest_lap_time"])
+        ],
+        textposition="outside",
+        cliponaxis=False,
+        customdata=list(zip(fl["fastest_lap_time"], fl["constructor"])),
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "Lap: %{customdata[0]} (%{customdata[1]})<br>"
+            "Gap to fastest: +%{x:.3f}s"
+            "<extra></extra>"
+        ),
     ))
+
+    # Vertical guide at zero so the "fastest" baseline is unambiguous.
+    fig.add_vline(x=0, line_color="#888", line_width=1, line_dash="dot")
+
     fig.update_layout(
         template=PLOTLY_TEMPLATE,
-        xaxis_title="Fastest Lap Rank",
-        height=max(400, len(fl) * 25),
+        xaxis_title="Gap to fastest lap (seconds)",
+        yaxis_title=None,
+        height=max(400, len(fl) * 26),
         yaxis=dict(autorange="reversed"),
+        margin=dict(l=70, r=80),
+        showlegend=False,
+        hoverlabel=dict(bgcolor="rgba(15,16,21,0.96)", bordercolor="#25262F"),
     )
     return fig
 
