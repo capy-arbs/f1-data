@@ -254,6 +254,31 @@ def load_sprint_results(conn, year: int):
     time.sleep(API_RATE_LIMIT_DELAY)
 
 
+def _parse_pit_duration(text) -> float | None:
+    """Convert a pit-stop duration string into seconds.
+
+    Handles both the normal seconds form ("22.630") and the M:SS.mmm form
+    ("18:01.553") that Jolpica returns when a "stop" was actually a long
+    repair or red-flag-induced pit-lane wait. Returns None when the input is
+    blank or unparseable.
+    """
+    if text is None:
+        return None
+    text = str(text).strip()
+    if not text:
+        return None
+    if ":" in text:
+        try:
+            mins, rest = text.split(":", 1)
+            return int(mins) * 60 + float(rest)
+        except (ValueError, AttributeError):
+            return None
+    try:
+        return float(text)
+    except (ValueError, TypeError):
+        return None
+
+
 def load_pit_stops_for_race(conn, year: int, round_num: int):
     """Lazy-load pit stops for a specific race."""
     if _already_fetched(conn, "pitstops", year, round_num):
@@ -270,10 +295,7 @@ def load_pit_stops_for_race(conn, year: int, round_num: int):
     for s in stops:
         for ps in s.get("PitStops", []) if isinstance(s, dict) and "PitStops" in s else [s]:
             dur = ps.get("duration", "0")
-            try:
-                dur_ms = float(dur)
-            except (ValueError, TypeError):
-                dur_ms = None
+            dur_ms = _parse_pit_duration(dur)
             conn.execute(
                 "INSERT OR IGNORE INTO pit_stops "
                 "(race_id, driver_id, stop_number, lap, time_of_day, duration, duration_ms) "

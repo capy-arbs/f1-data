@@ -129,6 +129,12 @@ def pit_stop_chart(df: pd.DataFrame) -> go.Figure:
     Stop 1 sits at the bottom, stop 2 above, stop 3 above that. Total bar
     height = total stationary time in the pits across the race. Stops are
     coloured by their order so the legend reads top-down 1 -> 2 -> 3.
+
+    Stops longer than ~2 minutes are filtered out — those are repairs,
+    red-flag pit-lane waits, or recoveries (e.g. Stroll's 18-minute
+    "stop" at Australia 2026), not normal tire changes. Including them
+    would crush every other bar to invisibility. A caption notes any that
+    were excluded.
     """
     if df.empty:
         return go.Figure()
@@ -137,6 +143,11 @@ def pit_stop_chart(df: pd.DataFrame) -> go.Figure:
     df["driver"] = df["code"].fillna(df["family_name"])
     df["stop_number"] = df["stop_number"].astype(int)
     df = df.sort_values(["driver", "stop_number"])
+
+    # Filter out abnormal "stops" (>120s = clearly an incident, not a tire change).
+    OUTLIER_S = 120.0
+    excluded = df[df["duration_ms"] > OUTLIER_S]
+    df = df[(df["duration_ms"].notna()) & (df["duration_ms"] <= OUTLIER_S)]
 
     # Stop-number palette — desaturated, cohesive, evenly-lit colours so no
     # single segment dominates the eye. Each stop gets a clearly different
@@ -172,6 +183,19 @@ def pit_stop_chart(df: pd.DataFrame) -> go.Figure:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, traceorder="normal"),
         hoverlabel=dict(bgcolor="rgba(15,16,21,0.96)", bordercolor="#25262F"),
     )
+
+    # Surface any excluded outliers so the chart doesn't quietly drop them.
+    if not excluded.empty:
+        notes = ", ".join(
+            f"{r['driver']} stop {int(r['stop_number'])} ({r['duration']})"
+            for _, r in excluded.iterrows()
+        )
+        fig.add_annotation(
+            x=0.5, y=1.06, xref="paper", yref="paper",
+            showarrow=False, xanchor="center",
+            text=f"Excluded (likely repair/red-flag delay): {notes}",
+            font=dict(color="#888A95", size=11),
+        )
     return fig
 
 
