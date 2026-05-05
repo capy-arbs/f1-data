@@ -1,0 +1,67 @@
+name: Refresh F1 data
+
+# Pulls fresh race results, qualifying, sprints, pit stops, and standings
+# from the Jolpica API for the current season, commits any changes to
+# f1_data.db, and pushes — which triggers Streamlit Cloud to redeploy.
+#
+# Schedule: every Monday at 06:00 UTC (after Sunday races have settled).
+# Also runnable on-demand from the Actions tab via workflow_dispatch.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Refresh current season
+        run: |
+          python <<'PY'
+          from datetime import datetime
+          from db.connection import get_db
+          from db.schema import init_db
+          from data.loader import load_season
+
+          init_db()
+          year = datetime.utcnow().year
+          with get_db() as conn:
+              load_season(conn, year)
+
+          # Quick sanity dump so the action log shows what happened.
+          with get_db() as conn:
+              row = conn.execute(
+                  "SELECT MAX(round) AS r FROM results res "
+                  "JOIN races ra ON res.race_id = ra.race_id "
+                  "WHERE ra.season = ?",
+                  (year,),
+              ).fetchone()
+              print(f"Latest round with results in {year}: R{row['r']}")
+          PY
+
+      - name: Commit and push if DB changed
+        run: |
+          git config user.name "f1-data-refresh-bot"
+          git config user.email "f1-data-refresh-bot@users.noreply.github.com"
+          git add f1_data.db
+          if git diff --staged --quiet; then
+            echo "No DB changes — nothing to commit."
+            exit 0
+          fi
+          git commit -m "Auto-refresh F1 data ($(date -u +%Y-%m-%d))"
+          git push

@@ -45,7 +45,8 @@ st.markdown(
 
 
 def home() -> None:
-    """Landing view: brief intro and quick-glance counts of what's loaded."""
+    """Landing view: brief intro, quick-glance counts, and data freshness."""
+    from datetime import datetime, date
     from db.connection import get_db
 
     st.title("F1 Analytics Dashboard")
@@ -59,6 +60,17 @@ def home() -> None:
         race_count = conn.execute("SELECT COUNT(*) FROM races").fetchone()[0]
         driver_count = conn.execute("SELECT COUNT(*) FROM drivers").fetchone()[0]
 
+        # Most recent race that actually has results recorded.
+        latest = conn.execute(
+            """
+            SELECT ra.season, ra.round, ra.race_name, ra.date
+            FROM results res
+            JOIN races ra ON res.race_id = ra.race_id
+            ORDER BY ra.date DESC
+            LIMIT 1
+            """
+        ).fetchone()
+
     col1, col2, col3 = st.columns(3)
     col1.metric("Seasons Loaded", season_count)
     col2.metric("Races", race_count)
@@ -69,10 +81,21 @@ def home() -> None:
             "No historical data loaded yet. Open **Settings → Load Data** "
             "to pull seasons from the Jolpica API."
         )
-    else:
-        st.caption(
-            "Live timing pulls from OpenF1 in real time and doesn't require a data load."
+    elif latest:
+        race_date = date.fromisoformat(latest["date"])
+        days_old = (date.today() - race_date).days
+        msg = (
+            f"Latest race in the database: **{latest['race_name']} "
+            f"({latest['season']} R{latest['round']})** — {race_date}."
         )
+        if days_old > 14:
+            st.warning(
+                msg + f" Data may be stale ({days_old} days since this race). "
+                "The auto-refresh action runs Mondays at 06:00 UTC; "
+                "you can also re-run it manually from the GitHub Actions tab."
+            )
+        else:
+            st.caption(msg + " Live timing pulls from OpenF1 in real time and doesn't require a data load.")
 
 
 # -- Page registry ---------------------------------------------------------
