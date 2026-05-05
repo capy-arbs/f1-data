@@ -133,6 +133,118 @@ def get_records(record_type: str) -> pd.DataFrame:
     return pd.DataFrame([dict(r) for r in rows])
 
 
+def get_fastest_pit_stops(season: int | None = None, limit: int = 50) -> pd.DataFrame:
+    """All-time (or per-season) fastest pit stops, ordered ascending by duration_ms.
+
+    Pit stop data only exists from 2011 onwards in the source feed; rows with a
+    null duration_ms (older races / DNF stops) are excluded.
+    """
+    where = "ps.duration_ms IS NOT NULL AND ps.duration_ms > 0"
+    params: list = []
+    if season is not None:
+        where += " AND r.season = ?"
+        params.append(season)
+    params.append(limit)
+
+    with get_db() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT r.season, r.round, r.race_name, r.date,
+                   d.given_name || ' ' || d.family_name AS driver,
+                   d.code AS code,
+                   c.name AS constructor,
+                   ps.lap, ps.duration, ps.duration_ms
+            FROM pit_stops ps
+            JOIN races r ON ps.race_id = r.race_id
+            JOIN drivers d ON ps.driver_id = d.driver_id
+            JOIN results res ON res.race_id = ps.race_id AND res.driver_id = ps.driver_id
+            JOIN constructors c ON res.constructor_id = c.constructor_id
+            WHERE {where}
+            ORDER BY ps.duration_ms ASC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+    return pd.DataFrame([dict(r) for r in rows])
+
+
+def get_championship_momentum(season: int, window: int = 3) -> pd.DataFrame:
+    """For each round, sum each driver's points over the trailing ``window`` races.
+
+    Tells the "who's hot right now" story — a leader with declining momentum vs.
+    a chaser surging into form is the classic championship narrative.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT r.round, r.race_name,
+                   d.driver_id, d.code, d.family_name,
+                   c.constructor_id, c.name AS constructor,
+                   res.points
+            FROM results res
+            JOIN races r ON res.race_id = r.race_id
+            JOIN drivers d ON res.driver_id = d.driver_id
+            JOIN constructors c ON res.constructor_id = c.constructor_id
+            WHERE r.season = ?
+            ORDER BY r.round, res.position
+            """,
+            (season,),
+        ).fetchall()
+    df = pd.DataFrame([dict(r) for r in rows])
+    if df.empty:
+        return df
+
+    df = df.sort_values(["family_name", "round"]).reset_index(drop=True)
+    df["rolling_points"] = (
+        df.groupby("family_name")["points"]
+        .transform(lambda s: s.rolling(window=window, min_periods=1).sum())
+    )
+    df["season_total"] = df.groupby("family_name")["points"].transform("cumsum")
+    return df
+
+
+def get_lap_time_evolution(circuit_id: str) -> pd.DataFrame:
+    """Year-by-year fastest race lap at one circuit — pace evolution over time.
+
+    ``fastest_lap_time`` is stored as "M:SS.mmm" text in the schema so we
+    parse it client-side. Drivers without a recorded fastest lap (early eras)
+    are simply absent from the output.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT r.season, r.race_name, r.date,
+                   res.fastest_lap_time, res.fastest_lap_speed,
+                   d.given_name || ' ' || d.family_name AS driver,
+                   d.code AS code,
+                   c.name AS constructor
+            FROM results res
+            JOIN races r ON res.race_id = r.race_id
+            JOIN drivers d ON res.driver_id = d.driver_id
+            JOIN constructors c ON res.constructor_id = c.constructor_id
+            WHERE r.circuit_id = ?
+              AND res.fastest_lap_time IS NOT NULL
+              AND res.fastest_lap_rank = 1
+            ORDER BY r.season, r.round
+            """,
+            (circuit_id,),
+        ).fetchall()
+    df = pd.DataFrame([dict(r) for r in rows])
+    if df.empty:
+        return df
+
+    def _to_seconds(t: str) -> float | None:
+        try:
+            mins, rest = t.split(":", 1)
+            return int(mins) * 60 + float(rest)
+        except (ValueError, AttributeError):
+            return None
+
+    df["lap_seconds"] = df["fastest_lap_time"].apply(_to_seconds)
+    df = df.dropna(subset=["lap_seconds"])
+    return df
+
+
 def get_championship_wins() -> pd.DataFrame:
     """Count championship wins (P1 in final driver standings) per driver."""
     with get_db() as conn:

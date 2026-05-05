@@ -28,12 +28,18 @@ if st.sidebar.button("Load Data", use_container_width=True):
 
 st.sidebar.divider()
 
+st.sidebar.markdown("**Live**")
+st.sidebar.page_link("pages/14_Live_Race.py", label="Live Race")
+
 st.sidebar.markdown("**Analysis**")
 st.sidebar.page_link("pages/1_Season_Tracker.py", label="Season Tracker")
 st.sidebar.page_link("pages/2_Race_Breakdown.py", label="Race Breakdown")
 st.sidebar.page_link("pages/3_Head_to_Head.py", label="Head-to-Head")
 st.sidebar.page_link("pages/4_Historical.py", label="Historical Comparison")
 st.sidebar.page_link("pages/11_Sprint_Analysis.py", label="Sprint Analysis")
+st.sidebar.page_link("pages/16_Championship_Momentum.py", label="Championship Momentum")
+st.sidebar.page_link("pages/15_Pit_Stop_Records.py", label="Pit Stop Records")
+st.sidebar.page_link("pages/17_Lap_Time_Evolution.py", label="Lap Time Evolution")
 
 st.sidebar.markdown("**Explore**")
 st.sidebar.page_link("pages/5_Circuit_Map.py", label="Circuit Map")
