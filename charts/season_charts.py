@@ -85,15 +85,16 @@ def position_progression_chart(df: pd.DataFrame) -> go.Figure:
         template=PLOTLY_TEMPLATE,
         xaxis_title="Round",
         yaxis_title="Championship Position",
-        height=500,
+        height=580,
         legend=dict(orientation="h", yanchor="bottom", y=-0.35, groupclick="togglegroup"),
         hovermode="x unified",
         # Compact hover so all 20+ drivers fit on screen without clipping.
         hoverlabel=dict(
-            font_size=11,
-            namelength=18,
-            bgcolor="rgba(15,16,21,0.95)",
+            font_size=10,
+            namelength=10,
+            bgcolor="rgba(15,16,21,0.96)",
             bordercolor="#25262F",
+            align="left",
         ),
     )
     return fig
@@ -130,15 +131,16 @@ def points_accumulation_chart(df: pd.DataFrame) -> go.Figure:
         template=PLOTLY_TEMPLATE,
         xaxis_title="Round",
         yaxis_title="Cumulative Points",
-        height=500,
+        height=580,
         legend=dict(orientation="h", yanchor="bottom", y=-0.35, groupclick="togglegroup"),
         hovermode="x unified",
         # Compact hover so all 20+ drivers fit on screen without clipping.
         hoverlabel=dict(
-            font_size=11,
-            namelength=18,
-            bgcolor="rgba(15,16,21,0.95)",
+            font_size=10,
+            namelength=10,
+            bgcolor="rgba(15,16,21,0.96)",
             bordercolor="#25262F",
+            align="left",
         ),
     )
     return fig
