@@ -13,17 +13,30 @@ _FALLBACK_COLORS = [
 
 
 def _build_color_map(df: pd.DataFrame) -> dict[str, str]:
-    """Map each driver label to their team color."""
-    color_map = {}
+    """Map each driver label to their team color.
+
+    Keyed by constructor first so teammates always share a color — both
+    when the team is in TEAM_COLORS and when it falls back. The previous
+    implementation iterated drivers and incremented the fallback index per
+    driver, which gave teammates different fallback colors (e.g. Cadillac's
+    two cars showing up as different colors on the same chart).
+    """
+    team_color: dict[str, str] = {}
     fallback_idx = 0
-    for driver in df["driver"].unique():
-        driver_rows = df[df["driver"] == driver]
-        constructor_id = driver_rows.iloc[-1].get("constructor_id", "")
-        if constructor_id and constructor_id in TEAM_COLORS:
-            color_map[driver] = TEAM_COLORS[constructor_id]
+    color_map: dict[str, str] = {}
+
+    # First pass: build a stable team -> color mapping.
+    for constructor_id in df.dropna(subset=["constructor_id"])["constructor_id"].unique():
+        if constructor_id in TEAM_COLORS:
+            team_color[constructor_id] = TEAM_COLORS[constructor_id]
         else:
-            color_map[driver] = _FALLBACK_COLORS[fallback_idx % len(_FALLBACK_COLORS)]
+            team_color[constructor_id] = _FALLBACK_COLORS[fallback_idx % len(_FALLBACK_COLORS)]
             fallback_idx += 1
+
+    # Second pass: each driver inherits their (last-known) team's color.
+    for driver in df["driver"].unique():
+        constructor_id = df[df["driver"] == driver].iloc[-1].get("constructor_id", "")
+        color_map[driver] = team_color.get(constructor_id, "#AAAAAA")
     return color_map
 
 
@@ -75,6 +88,13 @@ def position_progression_chart(df: pd.DataFrame) -> go.Figure:
         height=500,
         legend=dict(orientation="h", yanchor="bottom", y=-0.35, groupclick="togglegroup"),
         hovermode="x unified",
+        # Compact hover so all 20+ drivers fit on screen without clipping.
+        hoverlabel=dict(
+            font_size=11,
+            namelength=18,
+            bgcolor="rgba(15,16,21,0.95)",
+            bordercolor="#25262F",
+        ),
     )
     return fig
 
@@ -113,5 +133,12 @@ def points_accumulation_chart(df: pd.DataFrame) -> go.Figure:
         height=500,
         legend=dict(orientation="h", yanchor="bottom", y=-0.35, groupclick="togglegroup"),
         hovermode="x unified",
+        # Compact hover so all 20+ drivers fit on screen without clipping.
+        hoverlabel=dict(
+            font_size=11,
+            namelength=18,
+            bgcolor="rgba(15,16,21,0.95)",
+            bordercolor="#25262F",
+        ),
     )
     return fig

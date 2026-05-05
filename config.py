@@ -31,6 +31,9 @@ TEAM_COLORS = {
     "haas": "#B6BABD",
     "rb": "#6692FF",
     "sauber": "#52E252",
+    # 2026 entrants
+    "audi": "#F50537",      # Audi crimson (per OpenF1 broadcast metadata)
+    "cadillac": "#1B2A4E",  # Cadillac brand navy — distinct from Red Bull/Williams blues
     # Recent / rebranded
     "alphatauri": "#4E7C9B",
     "alfa": "#B12025",

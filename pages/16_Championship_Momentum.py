@@ -78,6 +78,7 @@ fig.update_layout(
     margin=dict(t=60, b=40, l=50, r=20),
     legend=dict(orientation="h", yanchor="bottom", y=1.02, groupclick="togglegroup"),
     hovermode="x unified",
+    hoverlabel=dict(font_size=11, namelength=18, bgcolor="rgba(15,16,21,0.95)", bordercolor="#25262F"),
 )
 st.plotly_chart(fig, use_container_width=True)
 
@@ -105,6 +106,7 @@ fig2.update_layout(
     margin=dict(t=30, b=40, l=50, r=20),
     legend=dict(orientation="h", yanchor="bottom", y=-0.25, groupclick="togglegroup"),
     hovermode="x unified",
+    hoverlabel=dict(font_size=11, namelength=18, bgcolor="rgba(15,16,21,0.95)", bordercolor="#25262F"),
 )
 st.plotly_chart(fig2, use_container_width=True)
 
