@@ -6,7 +6,10 @@ from data.normalizer import normalize_points
 
 
 def get_career_comparison(driver_ids: list[str]) -> pd.DataFrame:
-    """Get career stats for multiple drivers side by side."""
+    """Get career stats for multiple drivers side by side.
+
+    ``total_points`` and ``points_per_race`` include sprint points.
+    """
     with get_db() as conn:
         placeholders = ",".join("?" for _ in driver_ids)
         rows = conn.execute(
@@ -16,11 +19,10 @@ def get_career_comparison(driver_ids: list[str]) -> pd.DataFrame:
                    SUM(CASE WHEN res.position = 1 THEN 1 ELSE 0 END) as wins,
                    SUM(CASE WHEN res.position <= 3 AND res.position IS NOT NULL THEN 1 ELSE 0 END) as podiums,
                    SUM(CASE WHEN res.grid = 1 THEN 1 ELSE 0 END) as poles,
-                   SUM(res.points) as total_points,
+                   SUM(res.points) as race_points,
                    SUM(CASE WHEN res.position IS NULL THEN 1 ELSE 0 END) as dnfs,
                    ROUND(100.0 * SUM(CASE WHEN res.position = 1 THEN 1 ELSE 0 END) / COUNT(*), 1) as win_pct,
-                   ROUND(100.0 * SUM(CASE WHEN res.position <= 3 AND res.position IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 1) as podium_pct,
-                   ROUND(SUM(res.points) / COUNT(*), 2) as points_per_race
+                   ROUND(100.0 * SUM(CASE WHEN res.position <= 3 AND res.position IS NOT NULL THEN 1 ELSE 0 END) / COUNT(*), 1) as podium_pct
             FROM results res
             JOIN drivers d ON res.driver_id = d.driver_id
             WHERE res.driver_id IN ({placeholders})
@@ -28,7 +30,24 @@ def get_career_comparison(driver_ids: list[str]) -> pd.DataFrame:
             """,
             driver_ids,
         ).fetchall()
-    return pd.DataFrame([dict(r) for r in rows])
+        sprint_rows = conn.execute(
+            f"""
+            SELECT driver_id, COALESCE(SUM(points), 0) AS p
+            FROM sprint_results
+            WHERE driver_id IN ({placeholders})
+            GROUP BY driver_id
+            """,
+            driver_ids,
+        ).fetchall()
+    df = pd.DataFrame([dict(r) for r in rows])
+    if df.empty:
+        return df
+    sprint_map = {r["driver_id"]: r["p"] for r in sprint_rows}
+    df["sprint_points"] = df["driver_id"].map(sprint_map).fillna(0)
+    df["total_points"] = df["race_points"].fillna(0) + df["sprint_points"]
+    df["points_per_race"] = (df["total_points"] / df["races"]).round(2)
+    df = df.drop(columns=["race_points", "sprint_points"])
+    return df
 
 
 def get_normalized_season_points(driver_id: str, target_system: str = "2010-present") -> pd.DataFrame:
@@ -95,11 +114,14 @@ def get_records(record_type: str) -> pd.DataFrame:
             LIMIT 20
         """,
         "most_points": """
-            SELECT d.given_name, d.family_name, d.code,
-                   SUM(res.points) as value
-            FROM results res
-            JOIN drivers d ON res.driver_id = d.driver_id
-            GROUP BY res.driver_id
+            SELECT d.given_name, d.family_name, d.code, SUM(p.pts) AS value
+            FROM (
+                SELECT driver_id, points AS pts FROM results
+                UNION ALL
+                SELECT driver_id, points AS pts FROM sprint_results
+            ) p
+            JOIN drivers d ON p.driver_id = d.driver_id
+            GROUP BY p.driver_id
             HAVING value > 0
             ORDER BY value DESC
             LIMIT 20

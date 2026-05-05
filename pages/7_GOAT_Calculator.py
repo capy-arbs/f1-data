@@ -31,9 +31,8 @@ def get_all_driver_stats(min_races: int = 20) -> pd.DataFrame:
                    SUM(CASE WHEN res.position = 1 THEN 1 ELSE 0 END) as wins,
                    SUM(CASE WHEN res.position <= 3 AND res.position IS NOT NULL THEN 1 ELSE 0 END) as podiums,
                    SUM(CASE WHEN res.grid = 1 THEN 1 ELSE 0 END) as poles,
-                   SUM(res.points) as total_points,
-                   ROUND(100.0 * SUM(CASE WHEN res.position = 1 THEN 1 ELSE 0 END) / COUNT(*), 2) as win_rate,
-                   ROUND(SUM(res.points) / COUNT(*), 2) as points_per_race
+                   SUM(res.points) as race_points,
+                   ROUND(100.0 * SUM(CASE WHEN res.position = 1 THEN 1 ELSE 0 END) / COUNT(*), 2) as win_rate
             FROM results res
             JOIN drivers d ON res.driver_id = d.driver_id
             GROUP BY res.driver_id
@@ -45,6 +44,16 @@ def get_all_driver_stats(min_races: int = 20) -> pd.DataFrame:
         df = pd.DataFrame([dict(r) for r in rows])
         if df.empty:
             return df
+
+        # Sprint points per driver, joined in (LEFT join — many drivers have 0).
+        sprint_rows = conn.execute(
+            "SELECT driver_id, COALESCE(SUM(points), 0) AS p FROM sprint_results GROUP BY driver_id"
+        ).fetchall()
+        sprint_map = {r["driver_id"]: r["p"] for r in sprint_rows}
+        df["sprint_points"] = df["driver_id"].map(sprint_map).fillna(0)
+        df["total_points"] = df["race_points"].fillna(0) + df["sprint_points"]
+        df["points_per_race"] = (df["total_points"] / df["races"]).round(2)
+        df = df.drop(columns=["race_points", "sprint_points"])
 
         # Add championship count
         for idx, row in df.iterrows():

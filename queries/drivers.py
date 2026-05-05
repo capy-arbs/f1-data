@@ -1,7 +1,41 @@
-"""SQL queries for driver stats and head-to-head comparisons."""
+"""SQL queries for driver stats and head-to-head comparisons.
+
+Sprint points note: results.points is *main-race only*. Sprint-race points
+live in sprint_results.points (a separate table introduced for the 2021+
+sprint-race format). When summing championship totals, both must be
+included to match the official standings. The helpers here add sprint
+contributions where appropriate; race-counts and wins/podiums/poles stay
+main-race-only since those are tracked separately by F1.
+"""
 
 import pandas as pd
 from db.connection import get_db
+
+
+def _sprint_points_total(driver_id: str) -> float:
+    """Career-long sprint points for a driver (0 if none)."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(points), 0) AS p FROM sprint_results WHERE driver_id=?",
+            (driver_id,),
+        ).fetchone()
+    return float(row["p"]) if row else 0.0
+
+
+def _sprint_points_by_season(driver_id: str) -> dict[int, float]:
+    """Per-season sprint points for a driver, keyed by year."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT r.season, SUM(sr.points) AS p
+            FROM sprint_results sr
+            JOIN races r ON sr.race_id = r.race_id
+            WHERE sr.driver_id=?
+            GROUP BY r.season
+            """,
+            (driver_id,),
+        ).fetchall()
+    return {r["season"]: float(r["p"] or 0) for r in rows}
 
 
 def get_all_drivers() -> list[dict]:
@@ -60,7 +94,13 @@ def get_career_stats(driver_id: str) -> dict:
             """,
             (driver_id,),
         ).fetchone()
-    return dict(row) if row else {}
+    if not row:
+        return {}
+    d = dict(row)
+    # Add sprint points to the championship total — wins/podiums/poles stay
+    # main-race-only by F1 convention.
+    d["total_points"] = (d.get("total_points") or 0) + _sprint_points_total(driver_id)
+    return d
 
 
 def get_driver_seasons(driver_id: str) -> list[int]:
@@ -79,7 +119,7 @@ def get_driver_seasons(driver_id: str) -> list[int]:
 
 
 def get_season_stats(driver_id: str) -> pd.DataFrame:
-    """Per-season breakdown for a driver."""
+    """Per-season breakdown for a driver. ``points`` includes sprint points."""
     with get_db() as conn:
         rows = conn.execute(
             """
@@ -98,7 +138,13 @@ def get_season_stats(driver_id: str) -> pd.DataFrame:
             """,
             (driver_id,),
         ).fetchall()
-    return pd.DataFrame([dict(r) for r in rows])
+    df = pd.DataFrame([dict(r) for r in rows])
+    if df.empty:
+        return df
+    sprint_by_season = _sprint_points_by_season(driver_id)
+    if sprint_by_season:
+        df["points"] = df["points"].fillna(0) + df["season"].map(sprint_by_season).fillna(0)
+    return df
 
 
 def get_head_to_head(d1: str, d2: str) -> pd.DataFrame:
