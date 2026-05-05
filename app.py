@@ -5,8 +5,7 @@ import streamlit as st
 from db.schema import init_db
 
 st.set_page_config(
-    page_title="F1 Analytics Dashboard",
-    page_icon="🏎️",
+    page_title="Box-Box",
     layout="wide",
     initial_sidebar_state="expanded",
 )
