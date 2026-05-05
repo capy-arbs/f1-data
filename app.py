@@ -1,4 +1,4 @@
-"""F1 Analytics Dashboard — Main entry point."""
+"""F1 Analytics Dashboard — entry point and navigation."""
 
 import streamlit as st
 
@@ -11,60 +11,81 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Initialize database on first run
+# Idempotent — only runs DDL on first launch.
 init_db()
 
-st.title("F1 Analytics Dashboard")
-st.markdown(
-    "Explore Formula 1 data from 1950 to today. "
-    "Use the sidebar to load seasons, then navigate to the dashboard pages."
-)
 
-# Sidebar: data loading controls
-st.sidebar.header("Data Management")
+def home() -> None:
+    """Landing view: brief intro and quick-glance counts of what's loaded."""
+    from db.connection import get_db
 
-if st.sidebar.button("Load Data", use_container_width=True):
-    st.switch_page("pages/0_Load_Data.py")
+    st.title("F1 Analytics Dashboard")
+    st.markdown(
+        "Live timing, race history, and analytics for Formula 1 — 1950 to today. "
+        "Pick a section from the sidebar."
+    )
 
-st.sidebar.divider()
+    with get_db() as conn:
+        season_count = conn.execute("SELECT COUNT(*) FROM seasons").fetchone()[0]
+        race_count = conn.execute("SELECT COUNT(*) FROM races").fetchone()[0]
+        driver_count = conn.execute("SELECT COUNT(*) FROM drivers").fetchone()[0]
 
-st.sidebar.markdown("**Live**")
-st.sidebar.page_link("pages/14_Live_Race.py", label="Live Race")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Seasons Loaded", season_count)
+    col2.metric("Races", race_count)
+    col3.metric("Drivers", driver_count)
 
-st.sidebar.markdown("**Analysis**")
-st.sidebar.page_link("pages/1_Season_Tracker.py", label="Season Tracker")
-st.sidebar.page_link("pages/2_Race_Breakdown.py", label="Race Breakdown")
-st.sidebar.page_link("pages/3_Head_to_Head.py", label="Head-to-Head")
-st.sidebar.page_link("pages/4_Historical.py", label="Historical Comparison")
-st.sidebar.page_link("pages/11_Sprint_Analysis.py", label="Sprint Analysis")
-st.sidebar.page_link("pages/16_Championship_Momentum.py", label="Championship Momentum")
-st.sidebar.page_link("pages/15_Pit_Stop_Records.py", label="Pit Stop Records")
-st.sidebar.page_link("pages/17_Lap_Time_Evolution.py", label="Lap Time Evolution")
+    if season_count == 0:
+        st.info(
+            "No historical data loaded yet. Open **Settings → Load Data** "
+            "to pull seasons from the Jolpica API."
+        )
+    else:
+        st.caption(
+            "Live timing pulls from OpenF1 in real time and doesn't require a data load."
+        )
 
-st.sidebar.markdown("**Explore**")
-st.sidebar.page_link("pages/5_Circuit_Map.py", label="Circuit Map")
-st.sidebar.page_link("pages/6_Driver_Profiles.py", label="Driver Profiles")
-st.sidebar.page_link("pages/9_Race_Calendar.py", label="Race Calendar")
-st.sidebar.page_link("pages/12_Safety_Stats.py", label="Safety & DNF Stats")
 
-st.sidebar.markdown("**Fun**")
-st.sidebar.page_link("pages/7_GOAT_Calculator.py", label="GOAT Calculator")
-st.sidebar.page_link("pages/8_What_If.py", label="What-If Simulator")
-st.sidebar.page_link("pages/10_Trivia.py", label="F1 Trivia Quiz")
-st.sidebar.page_link("pages/13_Predictions.py", label="Prediction Tracker")
+# Single source of truth for sidebar nav. st.navigation replaces Streamlit's
+# auto-generated file-based nav, so the numeric prefixes on filenames in
+# pages/ no longer affect ordering — this dict does.
+nav = {
+    # Ungrouped landing page at the top of the sidebar.
+    "": [
+        st.Page(home, title="Home", default=True),
+    ],
+    "Live": [
+        st.Page("pages/14_Live_Race.py", title="Live Race"),
+    ],
+    "This Season": [
+        st.Page("pages/1_Season_Tracker.py", title="Standings"),
+        st.Page("pages/9_Race_Calendar.py", title="Race Calendar"),
+        st.Page("pages/2_Race_Breakdown.py", title="Race Breakdown"),
+        st.Page("pages/11_Sprint_Analysis.py", title="Sprint Analysis"),
+        st.Page("pages/16_Championship_Momentum.py", title="Championship Momentum"),
+    ],
+    "Drivers": [
+        st.Page("pages/6_Driver_Profiles.py", title="Driver Profiles"),
+        st.Page("pages/3_Head_to_Head.py", title="Head-to-Head"),
+        st.Page("pages/7_GOAT_Calculator.py", title="GOAT Calculator"),
+    ],
+    "Circuits": [
+        st.Page("pages/5_Circuit_Map.py", title="Circuit Map"),
+    ],
+    "Play": [
+        st.Page("pages/8_What_If.py", title="What-If Simulator"),
+        st.Page("pages/10_Trivia.py", title="Trivia"),
+        st.Page("pages/13_Predictions.py", title="Prediction Tracker"),
+    ],
+    "Records & History": [
+        st.Page("pages/4_Historical.py", title="Era Comparison"),
+        st.Page("pages/15_Pit_Stop_Records.py", title="Pit Stop Records"),
+        st.Page("pages/17_Lap_Time_Evolution.py", title="Lap Time Evolution"),
+        st.Page("pages/12_Safety_Stats.py", title="DNF Analysis"),
+    ],
+    "Settings": [
+        st.Page("pages/0_Load_Data.py", title="Load Data"),
+    ],
+}
 
-# Landing page stats
-from db.connection import get_db
-
-with get_db() as conn:
-    season_count = conn.execute("SELECT COUNT(*) FROM seasons").fetchone()[0]
-    race_count = conn.execute("SELECT COUNT(*) FROM races").fetchone()[0]
-    driver_count = conn.execute("SELECT COUNT(*) FROM drivers").fetchone()[0]
-
-col1, col2, col3 = st.columns(3)
-col1.metric("Seasons Loaded", season_count)
-col2.metric("Races", race_count)
-col3.metric("Drivers", driver_count)
-
-if season_count == 0:
-    st.info("No data loaded yet. Head to **Load Data** in the sidebar to get started.")
+st.navigation(nav).run()
