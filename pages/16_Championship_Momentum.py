@@ -47,9 +47,16 @@ if not drivers:
 
 plot_df = df[df["family_name"].isin(drivers)].copy()
 
+# Sort drivers so teammates render adjacent — keeps team groups together
+# in the legend and the unified hover tooltip.
+team_by_driver = (
+    plot_df.groupby("family_name")["constructor_id"].last().to_dict()
+)
+ordered_drivers = sorted(drivers, key=lambda d: (team_by_driver.get(d, ""), d))
+
 # Rolling-window line chart
 fig = go.Figure()
-for driver in drivers:
+for driver in ordered_drivers:
     d = plot_df[plot_df["family_name"] == driver].sort_values("round")
     if d.empty:
         continue
@@ -59,7 +66,8 @@ for driver in drivers:
         x=d["round"], y=d["rolling_points"],
         mode="lines+markers", name=driver,
         line=dict(color=color, width=2.5),
-        hovertemplate=f"{driver}<br>Round %{{x}}<br>Last {window} races: %{{y:.0f}} pts<extra></extra>",
+        legendgroup=constructor_id or driver,
+        legendgrouptitle_text=(constructor_id or "").replace("_", " ").title() or None,
     ))
 fig.update_layout(
     template=PLOTLY_TEMPLATE,
@@ -68,14 +76,15 @@ fig.update_layout(
     yaxis_title=f"Points (last {window} races)",
     height=440,
     margin=dict(t=60, b=40, l=50, r=20),
-    legend=dict(orientation="h", yanchor="bottom", y=1.02),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, groupclick="togglegroup"),
+    hovermode="x unified",
 )
 st.plotly_chart(fig, use_container_width=True)
 
 # Cumulative season-total comparison
 st.subheader("Season total")
 fig2 = go.Figure()
-for driver in drivers:
+for driver in ordered_drivers:
     d = plot_df[plot_df["family_name"] == driver].sort_values("round")
     if d.empty:
         continue
@@ -85,6 +94,8 @@ for driver in drivers:
         x=d["round"], y=d["season_total"],
         mode="lines", name=driver,
         line=dict(color=color, width=2),
+        legendgroup=constructor_id or driver,
+        legendgrouptitle_text=(constructor_id or "").replace("_", " ").title() or None,
     ))
 fig2.update_layout(
     template=PLOTLY_TEMPLATE,
@@ -92,6 +103,8 @@ fig2.update_layout(
     yaxis_title="Cumulative points",
     height=360,
     margin=dict(t=30, b=40, l=50, r=20),
+    legend=dict(orientation="h", yanchor="bottom", y=-0.25, groupclick="togglegroup"),
+    hovermode="x unified",
 )
 st.plotly_chart(fig2, use_container_width=True)
 

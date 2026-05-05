@@ -13,34 +13,133 @@ st.set_page_config(
 # Idempotent — only runs DDL on first launch.
 init_db()
 
-# Sidebar styling: hide Streamlit's auto-rendered nav (we render our own
-# below with collapsible groups) and shrink the sidebar to ~240px since the
-# default 336px dominates a 1366px screen and our labels fit easily.
+# Pitwall theme — broadcast-graphics-inspired CSS layered on top of the
+# config.toml palette. Hides Streamlit's auto-nav (we render our own),
+# tightens the sidebar, and gives headings + metrics a more F1-broadcast
+# feel (uppercase, condensed letter-spacing, red accent under page titles).
 st.markdown(
     """
     <style>
+    /* --- Sidebar: hide auto-nav, narrow width, flatten expander chrome --- */
     [data-testid="stSidebarNav"] { display: none !important; }
     section[data-testid="stSidebar"] {
         width: 240px !important;
         min-width: 240px !important;
         max-width: 240px !important;
+        background: linear-gradient(180deg, #15161D 0%, #0F1015 100%);
+        border-right: 1px solid #25262F;
     }
-    section[data-testid="stSidebar"] > div:first-child {
-        width: 240px !important;
-    }
-    /* Tighter spacing inside expanders so groups read like a menu, not cards */
+    section[data-testid="stSidebar"] > div:first-child { width: 240px !important; }
     section[data-testid="stSidebar"] [data-testid="stExpander"] {
         border: none;
+        margin-bottom: 4px;
     }
     section[data-testid="stSidebar"] [data-testid="stExpander"] details {
         border: none !important;
         box-shadow: none !important;
         background: transparent !important;
     }
+    section[data-testid="stSidebar"] [data-testid="stExpander"] summary {
+        font-size: 11px !important;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: #B0B2BD;
+        font-weight: 600;
+    }
+    section[data-testid="stSidebar"] a[data-testid="stPageLink"] {
+        font-size: 14px !important;
+        padding: 4px 8px !important;
+        border-radius: 4px !important;
+    }
+
+    /* --- Headings: broadcast-style condensed weight + red accent --- */
+    h1, h2, h3 {
+        letter-spacing: -0.01em;
+        font-weight: 700;
+    }
+    h1 {
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        border-bottom: 2px solid #E10600;
+        padding-bottom: 8px;
+        margin-bottom: 16px !important;
+    }
+    h2 {
+        text-transform: uppercase;
+        font-size: 1.15rem !important;
+        letter-spacing: 0.04em;
+        color: #F5F5F7;
+        margin-top: 1.5rem !important;
+    }
+    h3 {
+        text-transform: uppercase;
+        font-size: 0.95rem !important;
+        letter-spacing: 0.06em;
+        color: #B0B2BD;
+    }
+
+    /* --- Metric cards: bigger, monospace numerics for that timing-board feel --- */
+    [data-testid="stMetric"] {
+        background: #15161D;
+        border: 1px solid #25262F;
+        border-radius: 4px;
+        padding: 10px 14px;
+    }
+    [data-testid="stMetricValue"] {
+        font-family: "JetBrains Mono", "SF Mono", "Roboto Mono", Menlo, monospace !important;
+        font-size: 1.6rem !important;
+        font-weight: 600;
+        color: #F5F5F7;
+    }
+    [data-testid="stMetricLabel"] {
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-size: 11px !important;
+        color: #888A95 !important;
+    }
+
+    /* --- Buttons: filled F1 red --- */
+    .stButton > button[kind="primary"] {
+        background: #E10600;
+        border: none;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+    }
+    .stButton > button[kind="primary"]:hover { background: #B30500; }
+
+    /* --- Data tables: thinner borders, subtle row striping --- */
+    [data-testid="stDataFrame"] {
+        border: 1px solid #25262F;
+        border-radius: 4px;
+    }
+
+    /* --- Captions: match broadcast-graphic muted look --- */
+    .stCaption, [data-testid="stCaptionContainer"] {
+        color: #888A95 !important;
+        font-size: 12px !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
+
+
+# Plotly always-visible modebar — patches st.plotly_chart so every chart
+# call gets a consistent toolbar (with the reset-axes button visible) and
+# Plotly's logo dropped. Avoids touching 37 individual call sites.
+_original_plotly_chart = st.plotly_chart
+
+
+def _plotly_chart_with_modebar(*args, **kwargs):
+    config = dict(kwargs.get("config") or {})
+    config.setdefault("displaylogo", False)
+    config.setdefault("displayModeBar", True)
+    kwargs["config"] = config
+    return _original_plotly_chart(*args, **kwargs)
+
+
+st.plotly_chart = _plotly_chart_with_modebar
 
 
 # -- Page registry ---------------------------------------------------------
