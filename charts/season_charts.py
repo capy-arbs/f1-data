@@ -1,7 +1,9 @@
 """Plotly charts for the Season Tracker page."""
 
-import plotly.graph_objects as go
+from __future__ import annotations
+
 import pandas as pd
+import plotly.graph_objects as go
 
 from config import PLOTLY_TEMPLATE, TEAM_COLORS
 
@@ -15,17 +17,12 @@ _FALLBACK_COLORS = [
 def _build_color_map(df: pd.DataFrame) -> dict[str, str]:
     """Map each driver label to their team color.
 
-    Keyed by constructor first so teammates always share a color — both
-    when the team is in TEAM_COLORS and when it falls back. The previous
-    implementation iterated drivers and incremented the fallback index per
-    driver, which gave teammates different fallback colors (e.g. Cadillac's
-    two cars showing up as different colors on the same chart).
+    Keyed by constructor first so teammates always share a color.
     """
     team_color: dict[str, str] = {}
     fallback_idx = 0
     color_map: dict[str, str] = {}
 
-    # First pass: build a stable team -> color mapping.
     for constructor_id in df.dropna(subset=["constructor_id"])["constructor_id"].unique():
         if constructor_id in TEAM_COLORS:
             team_color[constructor_id] = TEAM_COLORS[constructor_id]
@@ -33,7 +30,6 @@ def _build_color_map(df: pd.DataFrame) -> dict[str, str]:
             team_color[constructor_id] = _FALLBACK_COLORS[fallback_idx % len(_FALLBACK_COLORS)]
             fallback_idx += 1
 
-    # Second pass: each driver inherits their (last-known) team's color.
     for driver in df["driver"].unique():
         constructor_id = df[df["driver"] == driver].iloc[-1].get("constructor_id", "")
         color_map[driver] = team_color.get(constructor_id, "#AAAAAA")
@@ -41,12 +37,7 @@ def _build_color_map(df: pd.DataFrame) -> dict[str, str]:
 
 
 def _drivers_grouped_by_team(df: pd.DataFrame) -> list[tuple[str, str]]:
-    """Return [(driver, constructor_id), ...] sorted so teammates are adjacent.
-
-    Used so the unified hover tooltip lists drivers from the same team next to
-    each other (Antonelli + Russell together, etc.) instead of in arbitrary
-    appearance order, and so legend grouping is consistent across charts.
-    """
+    """Return [(driver, constructor_id), ...] sorted so teammates render adjacent."""
     pairs = (
         df.groupby("driver")["constructor_id"]
         .last()
@@ -56,18 +47,54 @@ def _drivers_grouped_by_team(df: pd.DataFrame) -> list[tuple[str, str]]:
     return list(zip(pairs["driver"], pairs["constructor_id"]))
 
 
+def _build_team_round_lookup(df: pd.DataFrame, value_col: str) -> dict:
+    """Index (round, constructor_id) -> list of {driver, value}.
+
+    Used by the hover layer to find a driver's teammate (or teammates,
+    in the rare case of a mid-season swap) at the round under the cursor.
+    """
+    lookup: dict[tuple[int, str], list[dict]] = {}
+    for (rd, cid), group in df.groupby(["round", "constructor_id"]):
+        lookup[(rd, cid)] = group[["driver", value_col]].to_dict("records")
+    return lookup
+
+
+def _format_team_label(constructor_id: str) -> str:
+    return (constructor_id or "").replace("_", " ").title()
+
+
 def position_progression_chart(df: pd.DataFrame) -> go.Figure:
-    """Line chart showing championship position across rounds (P1 at top)."""
+    """Line chart showing championship position across rounds (P1 at top).
+
+    Hover (closest mode): shows team header, the hovered driver's position,
+    and their teammate's position at the same round in a 2-line tooltip.
+    """
     if df.empty:
         return go.Figure()
 
     df = df.copy()
     df["driver"] = df["code"].fillna(df["family_name"])
     color_map = _build_color_map(df)
+    lookup = _build_team_round_lookup(df, "position")
 
     fig = go.Figure()
     for driver, constructor_id in _drivers_grouped_by_team(df):
         ddf = df[df["driver"] == driver].sort_values("round")
+        team_label = _format_team_label(constructor_id)
+
+        # customdata[0] = teammate string ("RUS: P3" or "" if no teammate)
+        customdata = []
+        for _, row in ddf.iterrows():
+            mates = [
+                m for m in lookup.get((row["round"], row["constructor_id"]), [])
+                if m["driver"] != driver
+            ]
+            if mates and pd.notna(mates[0].get("position")):
+                tm = mates[0]
+                customdata.append([f"{tm['driver']}: P{int(tm['position'])}"])
+            else:
+                customdata.append([""])
+
         fig.add_trace(go.Scatter(
             x=ddf["round"],
             y=ddf["position"],
@@ -76,7 +103,14 @@ def position_progression_chart(df: pd.DataFrame) -> go.Figure:
             line=dict(color=color_map.get(driver, "#AAAAAA"), width=2),
             marker=dict(size=6),
             legendgroup=constructor_id or driver,
-            legendgrouptitle_text=constructor_id.replace("_", " ").title() if constructor_id else None,
+            legendgrouptitle_text=team_label or None,
+            customdata=customdata,
+            hovertemplate=(
+                f"<b>{team_label}</b> · Round %{{x}}<br>"
+                f"<b>{driver}</b>: P%{{y}}<br>"
+                "%{customdata[0]}"
+                "<extra></extra>"
+            ),
         ))
 
     fig.update_yaxes(autorange="reversed", dtick=1)
@@ -85,13 +119,11 @@ def position_progression_chart(df: pd.DataFrame) -> go.Figure:
         template=PLOTLY_TEMPLATE,
         xaxis_title="Round",
         yaxis_title="Championship Position",
-        height=580,
+        height=500,
         legend=dict(orientation="h", yanchor="bottom", y=-0.35, groupclick="togglegroup"),
-        hovermode="x unified",
-        # Compact hover so all 20+ drivers fit on screen without clipping.
+        hovermode="closest",
         hoverlabel=dict(
-            font_size=10,
-            namelength=10,
+            font_size=12,
             bgcolor="rgba(15,16,21,0.96)",
             bordercolor="#25262F",
             align="left",
@@ -101,7 +133,7 @@ def position_progression_chart(df: pd.DataFrame) -> go.Figure:
 
 
 def points_accumulation_chart(df: pd.DataFrame) -> go.Figure:
-    """Cumulative points across rounds, grouped so teammates appear together in hover."""
+    """Cumulative points across rounds. Hover shows hovered driver + teammate."""
     if df.empty:
         return go.Figure()
 
@@ -111,19 +143,40 @@ def points_accumulation_chart(df: pd.DataFrame) -> go.Figure:
 
     df = df.sort_values(["driver", "round"])
     df["cum_points"] = df.groupby("driver")["points"].cumsum()
+    lookup = _build_team_round_lookup(df, "cum_points")
 
     fig = go.Figure()
     for driver, constructor_id in _drivers_grouped_by_team(df):
         ddf = df[df["driver"] == driver]
-        color = color_map.get(driver, "#AAAAAA")
+        team_label = _format_team_label(constructor_id)
+
+        customdata = []
+        for _, row in ddf.iterrows():
+            mates = [
+                m for m in lookup.get((row["round"], row["constructor_id"]), [])
+                if m["driver"] != driver
+            ]
+            if mates and pd.notna(mates[0].get("cum_points")):
+                tm = mates[0]
+                customdata.append([f"{tm['driver']}: {int(tm['cum_points'])} pts"])
+            else:
+                customdata.append([""])
+
         fig.add_trace(go.Scatter(
             x=ddf["round"],
             y=ddf["cum_points"],
             name=driver,
             mode="lines",
-            line=dict(color=color, width=2),
+            line=dict(color=color_map.get(driver, "#AAAAAA"), width=2),
             legendgroup=constructor_id or driver,
-            legendgrouptitle_text=constructor_id.replace("_", " ").title() if constructor_id else None,
+            legendgrouptitle_text=team_label or None,
+            customdata=customdata,
+            hovertemplate=(
+                f"<b>{team_label}</b> · Round %{{x}}<br>"
+                f"<b>{driver}</b>: %{{y:.0f}} pts<br>"
+                "%{customdata[0]}"
+                "<extra></extra>"
+            ),
         ))
 
     fig.update_xaxes(dtick=1)
@@ -131,13 +184,11 @@ def points_accumulation_chart(df: pd.DataFrame) -> go.Figure:
         template=PLOTLY_TEMPLATE,
         xaxis_title="Round",
         yaxis_title="Cumulative Points",
-        height=580,
+        height=500,
         legend=dict(orientation="h", yanchor="bottom", y=-0.35, groupclick="togglegroup"),
-        hovermode="x unified",
-        # Compact hover so all 20+ drivers fit on screen without clipping.
+        hovermode="closest",
         hoverlabel=dict(
-            font_size=10,
-            namelength=10,
+            font_size=12,
             bgcolor="rgba(15,16,21,0.96)",
             bordercolor="#25262F",
             align="left",

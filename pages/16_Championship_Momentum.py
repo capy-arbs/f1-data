@@ -47,14 +47,33 @@ if not drivers:
 
 plot_df = df[df["family_name"].isin(drivers)].copy()
 
-# Sort drivers so teammates render adjacent — keeps team groups together
-# in the legend and the unified hover tooltip.
+# Sort drivers so teammates render adjacent.
 team_by_driver = (
     plot_df.groupby("family_name")["constructor_id"].last().to_dict()
 )
 ordered_drivers = sorted(drivers, key=lambda d: (team_by_driver.get(d, ""), d))
 
-# Rolling-window line chart
+# Build a (round, constructor_id) -> [{driver, rolling_points, season_total}, ...] index
+# so each trace's hover can include the teammate's value at the same round.
+team_round_lookup: dict = {}
+for (rd, cid), group in plot_df.groupby(["round", "constructor_id"]):
+    team_round_lookup[(rd, cid)] = group[["family_name", "rolling_points", "season_total"]].to_dict("records")
+
+
+def _teammate_text(row, value_col: str, suffix: str) -> str:
+    mates = [
+        m for m in team_round_lookup.get((row["round"], row["constructor_id"]), [])
+        if m["family_name"] != row["family_name"]
+    ]
+    if not mates:
+        return ""
+    val = mates[0].get(value_col)
+    if val is None:
+        return ""
+    return f"{mates[0]['family_name']}: {val:.0f}{suffix}"
+
+
+# Rolling-window line chart — closest-mode hover with driver + teammate
 fig = go.Figure()
 for driver in ordered_drivers:
     d = plot_df[plot_df["family_name"] == driver].sort_values("round")
@@ -62,12 +81,21 @@ for driver in ordered_drivers:
         continue
     constructor_id = d["constructor_id"].iloc[-1]
     color = TEAM_COLORS.get(constructor_id, "#888888")
+    team_label = (constructor_id or "").replace("_", " ").title()
+    customdata = [[_teammate_text(row, "rolling_points", "")] for _, row in d.iterrows()]
     fig.add_trace(go.Scatter(
         x=d["round"], y=d["rolling_points"],
         mode="lines+markers", name=driver,
         line=dict(color=color, width=2.5),
         legendgroup=constructor_id or driver,
-        legendgrouptitle_text=(constructor_id or "").replace("_", " ").title() or None,
+        legendgrouptitle_text=team_label or None,
+        customdata=customdata,
+        hovertemplate=(
+            f"<b>{team_label}</b> · Round %{{x}}<br>"
+            f"<b>{driver}</b>: %{{y:.0f}} pts<br>"
+            "%{customdata[0]}"
+            "<extra></extra>"
+        ),
     ))
 fig.update_layout(
     template=PLOTLY_TEMPLATE,
@@ -77,8 +105,8 @@ fig.update_layout(
     height=440,
     margin=dict(t=60, b=40, l=50, r=20),
     legend=dict(orientation="h", yanchor="bottom", y=1.02, groupclick="togglegroup"),
-    hovermode="x unified",
-    hoverlabel=dict(font_size=11, namelength=18, bgcolor="rgba(15,16,21,0.95)", bordercolor="#25262F"),
+    hovermode="closest",
+    hoverlabel=dict(font_size=12, bgcolor="rgba(15,16,21,0.96)", bordercolor="#25262F", align="left"),
 )
 st.plotly_chart(fig, use_container_width=True)
 
@@ -91,12 +119,21 @@ for driver in ordered_drivers:
         continue
     constructor_id = d["constructor_id"].iloc[-1]
     color = TEAM_COLORS.get(constructor_id, "#888888")
+    team_label = (constructor_id or "").replace("_", " ").title()
+    customdata = [[_teammate_text(row, "season_total", " pts")] for _, row in d.iterrows()]
     fig2.add_trace(go.Scatter(
         x=d["round"], y=d["season_total"],
         mode="lines", name=driver,
         line=dict(color=color, width=2),
         legendgroup=constructor_id or driver,
-        legendgrouptitle_text=(constructor_id or "").replace("_", " ").title() or None,
+        legendgrouptitle_text=team_label or None,
+        customdata=customdata,
+        hovertemplate=(
+            f"<b>{team_label}</b> · Round %{{x}}<br>"
+            f"<b>{driver}</b>: %{{y:.0f}} pts<br>"
+            "%{customdata[0]}"
+            "<extra></extra>"
+        ),
     ))
 fig2.update_layout(
     template=PLOTLY_TEMPLATE,
@@ -105,8 +142,8 @@ fig2.update_layout(
     height=360,
     margin=dict(t=30, b=40, l=50, r=20),
     legend=dict(orientation="h", yanchor="bottom", y=-0.25, groupclick="togglegroup"),
-    hovermode="x unified",
-    hoverlabel=dict(font_size=11, namelength=18, bgcolor="rgba(15,16,21,0.95)", bordercolor="#25262F"),
+    hovermode="closest",
+    hoverlabel=dict(font_size=12, bgcolor="rgba(15,16,21,0.96)", bordercolor="#25262F", align="left"),
 )
 st.plotly_chart(fig2, use_container_width=True)
 
