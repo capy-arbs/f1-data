@@ -124,24 +124,52 @@ def fastest_laps_chart(df: pd.DataFrame) -> go.Figure:
 
 
 def pit_stop_chart(df: pd.DataFrame) -> go.Figure:
-    """Bar chart of pit stop durations by driver."""
+    """Stacked bar chart of pit-stop durations by driver, ordered chronologically.
+
+    Stop 1 sits at the bottom, stop 2 above, stop 3 above that. Total bar
+    height = total stationary time in the pits across the race. Stops are
+    coloured by their order so the legend reads top-down 1 -> 2 -> 3.
+    """
     if df.empty:
         return go.Figure()
 
     df = df.copy()
     df["driver"] = df["code"].fillna(df["family_name"])
+    df["stop_number"] = df["stop_number"].astype(int)
+    df = df.sort_values(["driver", "stop_number"])
 
-    fig = px.bar(
-        df,
-        x="driver",
-        y="duration_ms",
-        color="stop_number",
-        barmode="group",
+    # Stop-number palette — ordered so stop 1 reads as "first" (deepest red),
+    # later stops gradually warmer/lighter. Discrete, not continuous.
+    stop_colors = ["#E10600", "#FFB800", "#27F4D2", "#6692FF", "#52E252"]
+
+    fig = go.Figure()
+    for stop_num in sorted(df["stop_number"].unique()):
+        stop_df = df[df["stop_number"] == stop_num]
+        color = stop_colors[(stop_num - 1) % len(stop_colors)]
+        fig.add_trace(go.Bar(
+            x=stop_df["driver"],
+            y=stop_df["duration_ms"],
+            name=f"Stop {stop_num}",
+            marker_color=color,
+            text=stop_df["duration"].apply(lambda d: f"{d}s" if pd.notna(d) else ""),
+            textposition="inside",
+            textfont=dict(size=10),
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                f"Stop {stop_num}: %{{y:.3f}}s"
+                "<extra></extra>"
+            ),
+        ))
+
+    fig.update_layout(
         template=PLOTLY_TEMPLATE,
-        labels={"duration_ms": "Duration (s)", "driver": "Driver", "stop_number": "Stop #"},
-        text="duration",
+        barmode="stack",
+        xaxis_title=None,
+        yaxis_title="Pit time (s)",
+        height=420,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, traceorder="normal"),
+        hoverlabel=dict(bgcolor="rgba(15,16,21,0.96)", bordercolor="#25262F"),
     )
-    fig.update_layout(height=400)
     return fig
 
 
