@@ -43,70 +43,19 @@ st.markdown(
 )
 
 
-def home() -> None:
-    """Landing view: brief intro, quick-glance counts, and data freshness."""
-    from datetime import datetime, date
-    from db.connection import get_db
-
-    st.title("F1 Analytics Dashboard")
-    st.markdown(
-        "Live timing, race history, and analytics for Formula 1 — 1950 to today. "
-        "Pick a section from the sidebar."
-    )
-
-    with get_db() as conn:
-        season_count = conn.execute("SELECT COUNT(*) FROM seasons").fetchone()[0]
-        race_count = conn.execute("SELECT COUNT(*) FROM races").fetchone()[0]
-        driver_count = conn.execute("SELECT COUNT(*) FROM drivers").fetchone()[0]
-
-        # Most recent race that actually has results recorded.
-        latest = conn.execute(
-            """
-            SELECT ra.season, ra.round, ra.race_name, ra.date
-            FROM results res
-            JOIN races ra ON res.race_id = ra.race_id
-            ORDER BY ra.date DESC
-            LIMIT 1
-            """
-        ).fetchone()
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Seasons Loaded", season_count)
-    col2.metric("Races", race_count)
-    col3.metric("Drivers", driver_count)
-
-    if season_count == 0:
-        st.info(
-            "No historical data loaded yet. Open **Settings → Load Data** "
-            "to pull seasons from the Jolpica API."
-        )
-    elif latest:
-        race_date = date.fromisoformat(latest["date"])
-        days_old = (date.today() - race_date).days
-        msg = (
-            f"Latest race in the database: **{latest['race_name']} "
-            f"({latest['season']} R{latest['round']})** — {race_date}."
-        )
-        if days_old > 14:
-            st.warning(
-                msg + f" Data may be stale ({days_old} days since this race). "
-                "The auto-refresh action runs Mondays at 06:00 UTC; "
-                "you can also re-run it manually from the GitHub Actions tab."
-            )
-        else:
-            st.caption(msg + " Live timing pulls from OpenF1 in real time and doesn't require a data load.")
-
-
 # -- Page registry ---------------------------------------------------------
 # Each page is created once and used twice: once in the navigation dict
 # (which handles routing) and once via st.page_link in our custom sidebar.
 
-home_page = st.Page(home, title="Home", default=True)
+# Live Race is the default landing page — it's the marquee feature, and it
+# falls back to the most recent completed session when no race is running,
+# so it's never empty.
+live_race_page = st.Page("pages/14_Live_Race.py", title="Live Race", default=True)
 
-# Each tuple: (group_label, [(page_object, ...), ...])
+# Each tuple: (group_label, [page, ...])
 GROUPS: list[tuple[str, list[st.Page]]] = [
     ("Live", [
-        st.Page("pages/14_Live_Race.py", title="Live Race"),
+        live_race_page,
     ]),
     ("This Season", [
         st.Page("pages/1_Season_Tracker.py", title="Standings"),
@@ -118,17 +67,19 @@ GROUPS: list[tuple[str, list[st.Page]]] = [
     ("Drivers", [
         st.Page("pages/6_Driver_Profiles.py", title="Driver Profiles"),
         st.Page("pages/3_Head_to_Head.py", title="Head-to-Head"),
-        st.Page("pages/7_GOAT_Calculator.py", title="GOAT Calculator"),
     ]),
     ("Circuits", [
         st.Page("pages/5_Circuit_Map.py", title="Circuit Map"),
     ]),
     ("Play", [
+        st.Page("pages/7_GOAT_Calculator.py", title="GOAT Calculator"),
         st.Page("pages/8_What_If.py", title="What-If Simulator"),
         st.Page("pages/10_Trivia.py", title="Trivia"),
         st.Page("pages/13_Predictions.py", title="Prediction Tracker"),
     ]),
     ("Records & History", [
+        st.Page("pages/18_Driver_Profiles_Historical.py", title="Historical Driver Profiles"),
+        st.Page("pages/19_Head_to_Head_Historical.py", title="Historical Head-to-Head"),
         st.Page("pages/4_Historical.py", title="Era Comparison"),
         st.Page("pages/15_Pit_Stop_Records.py", title="Pit Stop Records"),
         st.Page("pages/17_Lap_Time_Evolution.py", title="Lap Time Evolution"),
@@ -141,16 +92,13 @@ GROUPS: list[tuple[str, list[st.Page]]] = [
 
 # Flatten for st.navigation — it just needs the registry, position="hidden"
 # means it handles routing without rendering anything.
-nav_dict: dict[str, list[st.Page]] = {"": [home_page]}
-for label, pages in GROUPS:
-    nav_dict[label] = pages
+nav_dict: dict[str, list[st.Page]] = {label: pages for label, pages in GROUPS}
 
 current = st.navigation(nav_dict, position="hidden")
 
 
 # -- Custom sidebar (collapsed groups by default) --------------------------
 with st.sidebar:
-    st.page_link(home_page)
     for group_label, pages in GROUPS:
         # Auto-expand the group containing the current page, so the user
         # always sees where they are without losing context.

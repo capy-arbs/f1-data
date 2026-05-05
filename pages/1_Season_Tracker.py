@@ -21,7 +21,7 @@ if not seasons:
     st.warning("No data loaded. Head to **Load Data** to fetch some seasons first.")
     st.stop()
 
-season = st.sidebar.selectbox("Season", seasons)
+season = st.selectbox("Season", seasons)
 rounds = get_rounds_for_season(season)
 
 if not rounds:

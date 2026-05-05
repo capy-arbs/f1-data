@@ -61,17 +61,18 @@ def get_all_driver_stats(min_races: int = 20) -> pd.DataFrame:
     return df
 
 
-# Weight sliders
-st.sidebar.header("GOAT Weights")
-w_wins = st.sidebar.slider("Wins", 0, 100, 25)
-w_podiums = st.sidebar.slider("Podiums", 0, 100, 15)
-w_poles = st.sidebar.slider("Poles", 0, 100, 10)
-w_ppr = st.sidebar.slider("Points per Race", 0, 100, 20)
-w_winrate = st.sidebar.slider("Win Rate (%)", 0, 100, 15)
-w_champs = st.sidebar.slider("Championships", 0, 100, 30)
-w_longevity = st.sidebar.slider("Longevity (Races)", 0, 100, 5)
-
-min_races = st.sidebar.number_input("Minimum races to qualify", 10, 200, 20)
+# Weight sliders — kept in an expander so the rankings render first.
+with st.expander("Adjust GOAT weights", expanded=False):
+    wcol = st.columns(4)
+    w_wins = wcol[0].slider("Wins", 0, 100, 25)
+    w_podiums = wcol[1].slider("Podiums", 0, 100, 15)
+    w_poles = wcol[2].slider("Poles", 0, 100, 10)
+    w_ppr = wcol[3].slider("Points / Race", 0, 100, 20)
+    wcol2 = st.columns(4)
+    w_winrate = wcol2[0].slider("Win Rate %", 0, 100, 15)
+    w_champs = wcol2[1].slider("Championships", 0, 100, 30)
+    w_longevity = wcol2[2].slider("Longevity (Races)", 0, 100, 5)
+    min_races = wcol2[3].number_input("Min races to qualify", 10, 200, 20)
 
 df = get_all_driver_stats(min_races)
 if df.empty:

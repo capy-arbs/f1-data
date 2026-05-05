@@ -16,6 +16,33 @@ def get_all_drivers() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_current_drivers() -> list[dict]:
+    """Drivers who raced in the most recent season in the database.
+
+    Used by the "current grid" pages (Driver Profiles, Head-to-Head) so the
+    dropdown isn't padded with 70 years of retired drivers — those live on the
+    historical-archive versions instead.
+    """
+    with get_db() as conn:
+        latest = conn.execute(
+            "SELECT MAX(season) AS s FROM races"
+        ).fetchone()
+        if not latest or latest["s"] is None:
+            return []
+        rows = conn.execute(
+            """
+            SELECT DISTINCT d.driver_id, d.code, d.given_name, d.family_name, d.nationality
+            FROM results res
+            JOIN drivers d ON res.driver_id = d.driver_id
+            JOIN races r ON res.race_id = r.race_id
+            WHERE r.season = ?
+            ORDER BY d.family_name
+            """,
+            (latest["s"],),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_career_stats(driver_id: str) -> dict:
     with get_db() as conn:
         row = conn.execute(

@@ -111,7 +111,7 @@ if not sprint_seasons:
     st.warning("No sprint data loaded. Load seasons from 2021 onwards and re-fetch to include sprint results.")
     st.stop()
 
-season = st.sidebar.selectbox("Season", sprint_seasons, key="sprint_season")
+season = st.selectbox("Season", sprint_seasons, key="sprint_season")
 
 # Sprint points leaderboard
 st.subheader(f"{season} Sprint Points")

@@ -37,6 +37,37 @@ st.caption(
 )
 
 
+# Data freshness banner — surfaces if the historical DB is lagging behind
+# (auto-refresh runs Mon/Wed; manual refresh is in Settings -> Load Data).
+def _freshness_banner() -> None:
+    from datetime import date
+    from db.connection import get_db
+    with get_db() as conn:
+        latest = conn.execute(
+            """
+            SELECT ra.season, ra.round, ra.race_name, ra.date
+            FROM results res
+            JOIN races ra ON res.race_id = ra.race_id
+            ORDER BY ra.date DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    if not latest:
+        return
+    try:
+        days_old = (date.today() - date.fromisoformat(latest["date"])).days
+    except (TypeError, ValueError):
+        return
+    if days_old > 14:
+        st.warning(
+            f"Historical data may be stale — latest race in DB: "
+            f"**{latest['race_name']}** ({days_old}d ago). "
+            "Auto-refresh runs Mon/Wed; trigger manually from Settings → Load Data."
+        )
+
+_freshness_banner()
+
+
 # -- Sidebar: session picker + auto-refresh --------------------------------
 
 with st.sidebar:

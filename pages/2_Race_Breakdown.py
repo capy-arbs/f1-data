@@ -18,14 +18,15 @@ if not seasons:
     st.warning("No data loaded. Head to **Load Data** first.")
     st.stop()
 
-season = st.sidebar.selectbox("Season", seasons, key="rb_season")
+filter_cols = st.columns([1, 3])
+season = filter_cols[0].selectbox("Season", seasons, key="rb_season")
 rounds = get_rounds_for_season(season)
 if not rounds:
     st.warning(f"No races for {season}.")
     st.stop()
 
 round_options = {f"R{r['round']}: {r['race_name']}": r["round"] for r in rounds}
-selected = st.sidebar.selectbox("Race", list(round_options.keys()))
+selected = filter_cols[1].selectbox("Race", list(round_options.keys()))
 round_num = round_options[selected]
 
 # Race info header

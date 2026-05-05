@@ -1,4 +1,4 @@
-"""Head-to-Head — compare any two drivers."""
+"""Historical Head-to-Head — compare any two drivers across all eras."""
 
 import streamlit as st
 import pandas as pd
@@ -6,7 +6,7 @@ import pandas as pd
 from db.schema import init_db
 from db.connection import get_db
 from queries.drivers import (
-    get_current_drivers,
+    get_all_drivers,
     get_career_stats,
     get_season_stats,
     get_driver_seasons,
@@ -22,10 +22,10 @@ from charts.comparison_charts import (
 
 init_db()
 
-st.title("Head-to-Head Comparison")
-st.caption("Current grid only. For all-time matchups across eras, see **Records & History → Historical Head-to-Head**.")
+st.title("Historical Head-to-Head")
+st.caption("Compare any two drivers across all loaded seasons. For only the current grid, use **Drivers → Head-to-Head**.")
 
-drivers = get_current_drivers()
+drivers = get_all_drivers()
 if not drivers:
     st.warning("No data loaded. Head to **Load Data** first.")
     st.stop()

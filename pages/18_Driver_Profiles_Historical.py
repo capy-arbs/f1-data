@@ -1,19 +1,19 @@
-"""Driver Profiles — full career summary for any driver."""
+"""Historical Driver Profiles — full archive of every driver in the database."""
 
 import streamlit as st
 import plotly.graph_objects as go
 
 from db.schema import init_db
 from db.connection import get_db
-from queries.drivers import get_current_drivers, get_career_stats, get_season_stats
+from queries.drivers import get_all_drivers, get_career_stats, get_season_stats
 from config import PLOTLY_TEMPLATE, TEAM_COLORS
 
 init_db()
 
-st.title("Driver Profiles")
-st.caption("Drivers active in the current season. For retired drivers and full archive, see **Records & History → Historical Driver Profiles**.")
+st.title("Historical Driver Profiles")
+st.caption("Every driver in the database, 1950 to present. For just the current grid, use **Drivers → Driver Profiles**.")
 
-drivers = get_current_drivers()
+drivers = get_all_drivers()
 if not drivers:
     st.warning("No data loaded. Head to **Load Data** first.")
     st.stop()

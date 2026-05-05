@@ -17,7 +17,7 @@ if not seasons:
     st.warning("No data loaded. Head to **Load Data** first.")
     st.stop()
 
-season = st.sidebar.selectbox("Season", seasons, key="cal_season")
+season = st.selectbox("Season", seasons, key="cal_season")
 calendar = get_race_calendar(season)
 
 if calendar.empty:
