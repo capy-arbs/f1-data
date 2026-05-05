@@ -171,24 +171,46 @@ def get_fastest_pit_stops(season: int | None = None, limit: int = 50) -> pd.Data
 def get_championship_momentum(season: int, window: int = 3) -> pd.DataFrame:
     """For each round, sum each driver's points over the trailing ``window`` races.
 
+    Includes sprint-race points (which live in a separate table) — Kimi's
+    season-total here would otherwise differ from the official standings by
+    his sprint contribution.
+
     Tells the "who's hot right now" story — a leader with declining momentum vs.
     a chaser surging into form is the classic championship narrative.
     """
     with get_db() as conn:
+        # Main-race points + sprint points per (round, driver). UNION ALL
+        # then GROUP so a driver who scored in both at the same round gets
+        # one summed row.
         rows = conn.execute(
             """
-            SELECT r.round, r.race_name,
-                   d.driver_id, d.code, d.family_name,
-                   c.constructor_id, c.name AS constructor,
-                   res.points
-            FROM results res
-            JOIN races r ON res.race_id = r.race_id
-            JOIN drivers d ON res.driver_id = d.driver_id
-            JOIN constructors c ON res.constructor_id = c.constructor_id
-            WHERE r.season = ?
-            ORDER BY r.round, res.position
+            SELECT round, race_name, driver_id, code, family_name,
+                   constructor_id, constructor, SUM(points) AS points
+            FROM (
+                SELECT r.round, r.race_name,
+                       d.driver_id, d.code, d.family_name,
+                       c.constructor_id, c.name AS constructor,
+                       res.points AS points
+                FROM results res
+                JOIN races r ON res.race_id = r.race_id
+                JOIN drivers d ON res.driver_id = d.driver_id
+                JOIN constructors c ON res.constructor_id = c.constructor_id
+                WHERE r.season = ?
+                UNION ALL
+                SELECT r.round, r.race_name,
+                       d.driver_id, d.code, d.family_name,
+                       c.constructor_id, c.name AS constructor,
+                       sr.points AS points
+                FROM sprint_results sr
+                JOIN races r ON sr.race_id = r.race_id
+                JOIN drivers d ON sr.driver_id = d.driver_id
+                JOIN constructors c ON sr.constructor_id = c.constructor_id
+                WHERE r.season = ?
+            )
+            GROUP BY round, driver_id
+            ORDER BY round, family_name
             """,
-            (season,),
+            (season, season),
         ).fetchall()
     df = pd.DataFrame([dict(r) for r in rows])
     if df.empty:
