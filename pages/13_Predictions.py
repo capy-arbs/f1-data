@@ -1,34 +1,56 @@
-"""Prediction Tracker — log race predictions and track accuracy."""
+"""Prediction Tracker — log race predictions and track accuracy.
+
+Predictions are stored in the **browser's localStorage** (per-browser, not
+on the server). This means:
+  - Each visitor's predictions are isolated from everyone else's.
+  - Predictions survive container restarts on Streamlit Cloud (the previous
+    server-side predictions.json was wiped whenever the container slept).
+  - Predictions don't follow you across devices — that's the trade-off for
+    not requiring an account.
+"""
+
+from __future__ import annotations
 
 import json
-import os
-import streamlit as st
-import pandas as pd
 from datetime import datetime
+
+import pandas as pd
+import streamlit as st
+from streamlit_local_storage import LocalStorage
 
 from db.schema import init_db
 from db.connection import get_db
 from queries.standings import get_available_seasons, get_rounds_for_season
-from config import PLOTLY_TEMPLATE
 
 init_db()
 
 st.title("Prediction Tracker")
-st.markdown("Log your predictions before each race and see how accurate you are!")
+st.markdown("Log your podium predictions before each race and see how accurate you are over time.")
 
-PREDICTIONS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "predictions.json")
+STORAGE_KEY = "f1_predictions_v1"
+storage = LocalStorage()
 
+
+# -- Storage helpers (browser localStorage via component) ------------------
 
 def load_predictions() -> dict:
-    if os.path.exists(PREDICTIONS_FILE):
-        with open(PREDICTIONS_FILE) as f:
-            return json.load(f)
-    return {}
+    """Pull the predictions dict out of localStorage, or {} if nothing stored.
+
+    The component returns the raw stored string; we JSON-decode here.
+    First render of a fresh session may return None — Streamlit reruns
+    automatically once the component reports its real value.
+    """
+    raw = storage.getItem(STORAGE_KEY)
+    if raw is None or raw == "":
+        return {}
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
 
 
-def save_predictions(data: dict):
-    with open(PREDICTIONS_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+def save_predictions(data: dict) -> None:
+    storage.setItem(STORAGE_KEY, json.dumps(data))
 
 
 def get_drivers_for_season(season: int) -> list[str]:
@@ -81,7 +103,6 @@ tab1, tab2 = st.tabs(["Make Predictions", "Track Accuracy"])
 
 with tab1:
     st.subheader("Log a Prediction")
-
     season = st.selectbox("Season", seasons, key="pred_season")
     rounds = get_rounds_for_season(season)
     if not rounds:
@@ -101,7 +122,10 @@ with tab1:
     existing = predictions.get(key)
 
     if existing:
-        st.success(f"You already predicted: P1: {existing.get('p1')}, P2: {existing.get('p2')}, P3: {existing.get('p3')}")
+        st.success(
+            f"You already predicted: P1: {existing.get('p1')}, "
+            f"P2: {existing.get('p2')}, P3: {existing.get('p3')}"
+        )
         if st.button("Clear prediction"):
             del predictions[key]
             save_predictions(predictions)
@@ -125,14 +149,14 @@ with tab1:
                 "timestamp": datetime.now().isoformat(),
             }
             save_predictions(predictions)
-            st.success("Prediction saved!")
+            st.success("Prediction saved to your browser.")
             st.rerun()
 
 with tab2:
     st.subheader("Prediction Accuracy")
 
     if not predictions:
-        st.info("No predictions logged yet. Go make some!")
+        st.info("No predictions logged yet — go make some.")
         st.stop()
 
     results = []
@@ -140,7 +164,6 @@ with tab2:
         actual = get_actual_result(pred["season"], pred["round"])
         score = 0
         details = {"Race": pred.get("race", key), "Season": pred["season"]}
-
         details["Pred P1"] = pred["p1"]
         details["Pred P2"] = pred["p2"]
         details["Pred P3"] = pred["p3"]
@@ -149,17 +172,12 @@ with tab2:
             details["Actual P1"] = actual["p1"]
             details["Actual P2"] = actual["p2"]
             details["Actual P3"] = actual["p3"]
-
-            # Scoring: 3 points for exact position, 1 point for on podium but wrong spot
-            predicted_podium = {pred["p1"], pred["p2"], pred["p3"]}
-            actual_podium_list = [actual["p1"], actual["p2"], actual["p3"]]
-
-            for i, pos in enumerate(["p1", "p2", "p3"], 1):
+            actual_podium = [actual["p1"], actual["p2"], actual["p3"]]
+            for pos in ("p1", "p2", "p3"):
                 if pred[pos] == actual[pos]:
-                    score += 3  # Exact position match
-                elif pred[pos] in actual_podium_list:
-                    score += 1  # Right driver, wrong position
-
+                    score += 3  # exact spot
+                elif pred[pos] in actual_podium:
+                    score += 1  # right driver, wrong spot
             details["Score"] = f"{score}/9"
         else:
             details["Actual P1"] = "—"
@@ -172,19 +190,23 @@ with tab2:
     results_df = pd.DataFrame(results)
     st.dataframe(results_df, hide_index=True, use_container_width=True)
 
-    # Overall accuracy
     scored = [r for r in results if r["Score"] != "Pending"]
     if scored:
         total_score = sum(int(r["Score"].split("/")[0]) for r in scored)
         max_score = len(scored) * 9
         accuracy = 100 * total_score / max_score if max_score > 0 else 0
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Predictions Made", len(scored))
-        col2.metric("Total Score", f"{total_score}/{max_score}")
-        col3.metric("Accuracy", f"{accuracy:.1f}%")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Predictions Made", len(scored))
+        m2.metric("Total Score", f"{total_score}/{max_score}")
+        m3.metric("Accuracy", f"{accuracy:.1f}%")
 
-        # Perfect predictions
         perfect = sum(1 for r in scored if r["Score"] == "9/9")
         if perfect > 0:
             st.success(f"Perfect predictions: {perfect}")
+
+    with st.expander("Reset all predictions"):
+        st.caption("Clears every prediction stored in your browser. Cannot be undone.")
+        if st.button("Wipe all predictions", type="secondary"):
+            storage.setItem(STORAGE_KEY, json.dumps({}))
+            st.rerun()
