@@ -4,12 +4,16 @@ name: Refresh F1 data
 # from the Jolpica API for the current season, commits any changes to
 # f1_data.db, and pushes — which triggers Streamlit Cloud to redeploy.
 #
-# Schedule: every Monday at 06:00 UTC (after Sunday races have settled).
+# Schedule:
+#   - Monday 06:00 UTC: catches Sunday race results once they've settled.
+#   - Wednesday 06:00 UTC: catches mid-week steward decisions and DSQ/penalty
+#     updates that retroactively change finishing positions, before the next
+#     race weekend starts.
 # Also runnable on-demand from the Actions tab via workflow_dispatch.
 
 on:
   schedule:
-    - cron: '0 6 * * 1'
+    - cron: '0 6 * * 1,3'
   workflow_dispatch:
 
 permissions:
