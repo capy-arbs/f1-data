@@ -8,6 +8,7 @@ from db.schema import init_db
 from db.connection import get_db
 from queries.circuits import get_all_circuits, get_circuit_history
 from queries.standings import get_available_seasons
+from data.track_geojson import get_track_outline
 from config import PLOTLY_TEMPLATE
 
 init_db()
@@ -71,42 +72,90 @@ col3.metric("Latest Race", int(circuit["last_race"]) if circuit["last_race"] els
 
 
 # -- Track outline view --------------------------------------------------
-# Plotly Scattermapbox with the open-street-map base tiles. Zoom level 14
-# is where track shapes become clearly visible in OSM data — much more
-# informative than a generic location pin on a country-level map.
+# Renders the actual track shape as a Plotly line plot, F1.com-style:
+# clean SVG-like outline on the dark theme, no map background, equal
+# aspect ratio so the geometry isn't squished. GeoJSON sourced from the
+# bacinger/f1-circuits repo (MIT licensed).
 
-if circuit["lat"] and circuit["lng"]:
-    st.subheader("Track outline")
-    st.caption(
-        "Pan and zoom to inspect the layout. OSM renders the track surface — drag to "
-        "explore turns or zoom out for context."
-    )
-    fig = go.Figure(go.Scattermapbox(
-        lat=[circuit["lat"]],
-        lon=[circuit["lng"]],
-        mode="markers",
-        marker=dict(size=14, color="#E10600", opacity=0.9),
-        hovertext=[circuit["name"]],
-        hoverinfo="text",
+st.subheader("Track outline")
+outline = get_track_outline(
+    circuit["circuit_id"],
+    lat=circuit.get("lat"),
+    lng=circuit.get("lng"),
+)
+
+if outline:
+    coords = outline["coords"]
+    props = outline.get("props", {})
+    lngs = [c[0] for c in coords]
+    lats = [c[1] for c in coords]
+
+    fig = go.Figure()
+    # Subtle "shadow" trace under the main line for a touch of depth.
+    fig.add_trace(go.Scatter(
+        x=lngs, y=lats, mode="lines",
+        line=dict(color="rgba(225, 6, 0, 0.18)", width=18),
+        hoverinfo="skip", showlegend=False,
     ))
+    # The track itself.
+    fig.add_trace(go.Scatter(
+        x=lngs, y=lats, mode="lines",
+        line=dict(color="#E10600", width=4, shape="spline"),
+        hoverinfo="skip", showlegend=False,
+    ))
+    # Start/finish marker — first coordinate.
+    fig.add_trace(go.Scatter(
+        x=[lngs[0]], y=[lats[0]], mode="markers",
+        marker=dict(size=12, color="#FFFFFF", line=dict(color="#0A0B0F", width=2), symbol="square"),
+        hovertext=["Start / Finish"], hoverinfo="text", showlegend=False,
+    ))
+
+    fig.update_xaxes(visible=False)
+    fig.update_yaxes(visible=False, scaleanchor="x", scaleratio=1)
     fig.update_layout(
-        mapbox=dict(
-            style="open-street-map",
-            center=dict(lat=circuit["lat"], lon=circuit["lng"]),
-            zoom=14,
-        ),
+        template=PLOTLY_TEMPLATE,
         height=520,
-        margin=dict(t=10, b=0, l=0, r=0),
+        margin=dict(t=10, b=10, l=10, r=10),
+        plot_bgcolor="#0A0B0F",
+        paper_bgcolor="#0A0B0F",
         showlegend=False,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
-    with get_db() as conn:
-        wiki = conn.execute(
-            "SELECT url FROM circuits WHERE circuit_id=?", (circuit["circuit_id"],)
-        ).fetchone()
-    if wiki and wiki["url"]:
-        st.caption(f"More on [Wikipedia]({wiki['url']})")
+    # Surface track metadata from the GeoJSON properties.
+    meta_cols = st.columns(3)
+    if props.get("length"):
+        meta_cols[0].caption(f"**Track length:** {props['length']} m")
+    if props.get("opened"):
+        meta_cols[1].caption(f"**Opened:** {props['opened']}")
+    if props.get("firstgp"):
+        meta_cols[2].caption(f"**First GP:** {props['firstgp']}")
+else:
+    # Track outline data not available — fall back to a quick OSM map view
+    # so users still get a sense of location without the empty state.
+    if circuit["lat"] and circuit["lng"]:
+        st.caption("No track outline available for this circuit — showing location on a map instead.")
+        fig = go.Figure(go.Scattermapbox(
+            lat=[circuit["lat"]], lon=[circuit["lng"]],
+            mode="markers",
+            marker=dict(size=14, color="#E10600", opacity=0.9),
+            hovertext=[circuit["name"]], hoverinfo="text",
+        ))
+        fig.update_layout(
+            mapbox=dict(style="open-street-map",
+                        center=dict(lat=circuit["lat"], lon=circuit["lng"]), zoom=14),
+            height=420,
+            margin=dict(t=10, b=0, l=0, r=0),
+            showlegend=False,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+with get_db() as conn:
+    wiki = conn.execute(
+        "SELECT url FROM circuits WHERE circuit_id=?", (circuit["circuit_id"],)
+    ).fetchone()
+if wiki and wiki["url"]:
+    st.caption(f"More on [Wikipedia]({wiki['url']})")
 
 
 # -- Race history -------------------------------------------------------
