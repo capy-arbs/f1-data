@@ -138,9 +138,11 @@ def pit_stop_chart(df: pd.DataFrame) -> go.Figure:
     df["stop_number"] = df["stop_number"].astype(int)
     df = df.sort_values(["driver", "stop_number"])
 
-    # Stop-number palette — ordered so stop 1 reads as "first" (deepest red),
-    # later stops gradually warmer/lighter. Discrete, not continuous.
-    stop_colors = ["#E10600", "#FFB800", "#27F4D2", "#6692FF", "#52E252"]
+    # Stop-number palette — desaturated, cohesive, evenly-lit colours so no
+    # single segment dominates the eye. Each stop gets a clearly different
+    # hue (slate -> copper -> sage -> plum -> teal) for distinguishability
+    # without the broadcast-graphic intensity of the team-colour scheme.
+    stop_colors = ["#5B7C99", "#C29A6E", "#7A9B6E", "#8E7AA0", "#6B8B8E"]
 
     fig = go.Figure()
     for stop_num in sorted(df["stop_number"].unique()):
