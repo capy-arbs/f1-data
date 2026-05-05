@@ -14,7 +14,7 @@ from charts.season_charts import position_progression_chart, points_accumulation
 
 init_db()
 
-st.title("Season Tracker")
+st.title("Standings")
 
 seasons = get_available_seasons()
 if not seasons:
