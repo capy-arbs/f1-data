@@ -237,6 +237,11 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
 - [ ] What-If Driver Swap and Alternative Points System tabs only swap main-race results — sprint results stick with the original recipient. Either include sprints in the swap or document the asymmetry on-page.
 - [ ] Track outline rotation per circuit — F1.com diagrams are stylized rotations that don't match true North; would need a hand-curated rotation table per circuit.
 - [ ] Equal-area projection for track outlines — currently uses raw lng/lat, which Mercator-squashes high-latitude tracks (Silverstone, Spa, Zandvoort) horizontally by ~30-40%. Easy fix: multiply X by `cos(latitude)`.
+- [ ] **Live track map** — show driver positions on the track in real time, like F1's broadcast graphics. OpenF1's `/v1/location` endpoint gives X/Y/Z coordinates at ~3-4 Hz per driver. Phased approach:
+  - Phase 1: snapshot map. Poll location every few seconds, plot dots per driver. Track outline derived from accumulated location points (the racing line traces it). ~80 LoC.
+  - Phase 2: smooth animation between samples (Plotly animation frames or fast refresh loop).
+  - Phase 3: calibrated overlay on the bacinger track outline. Requires per-circuit transformation matrix to map OpenF1's local meters → bacinger's lat/lng. Could also be derived automatically by bounding-box alignment.
+- [ ] Start/finish marker on track outlines — bacinger GeoJSON doesn't encode where start/finish is, so we can't reliably mark it. Removed the misleading marker from coords[0] for now. To put it back accurately we'd need either: (a) hand-curated index per circuit, or (b) use OpenF1 location data to find the actual timing line.
 - [ ] More live-race widgets: DRS detection (gap < 1.0s), pit-window predictor, undercut/overcut calculator
 - [ ] Tire degradation modeling for Time-to-Strike confidence
 

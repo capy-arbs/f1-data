@@ -97,17 +97,14 @@ if outline:
         line=dict(color="rgba(225, 6, 0, 0.18)", width=18),
         hoverinfo="skip", showlegend=False,
     ))
-    # The track itself.
+    # The track itself. No start/finish marker — the bacinger GeoJSON
+    # files don't encode where the start/finish line is; LineStrings just
+    # begin wherever the author drew them from. A marker on coords[0]
+    # would be inaccurate per-circuit.
     fig.add_trace(go.Scatter(
         x=lngs, y=lats, mode="lines",
         line=dict(color="#E10600", width=4, shape="spline"),
         hoverinfo="skip", showlegend=False,
-    ))
-    # Start/finish marker — first coordinate.
-    fig.add_trace(go.Scatter(
-        x=[lngs[0]], y=[lats[0]], mode="markers",
-        marker=dict(size=12, color="#FFFFFF", line=dict(color="#0A0B0F", width=2), symbol="square"),
-        hovertext=["Start / Finish"], hoverinfo="text", showlegend=False,
     ))
 
     fig.update_xaxes(visible=False)
