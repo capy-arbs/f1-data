@@ -5,15 +5,19 @@ name: Refresh F1 data
 # f1_data.db, and pushes — which triggers Streamlit Cloud to redeploy.
 #
 # Schedule:
-#   - Monday 06:00 UTC: catches Sunday race results once they've settled.
-#   - Wednesday 06:00 UTC: catches mid-week steward decisions and DSQ/penalty
+#   - Monday 06:13 UTC: catches Sunday race results once they've settled.
+#   - Wednesday 06:13 UTC: catches mid-week steward decisions and DSQ/penalty
 #     updates that retroactively change finishing positions, before the next
 #     race weekend starts.
+# 06:13 (off-the-hour) reduces collisions with the GitHub Actions runner pool,
+# which is heavily oversubscribed at top-of-the-hour cron times. Free-tier
+# jobs scheduled exactly at :00 are commonly delayed 30-90 minutes or fail
+# with "could not acquire runner" — :13 picks up cleanly almost always.
 # Also runnable on-demand from the Actions tab via workflow_dispatch.
 
 on:
   schedule:
-    - cron: '0 6 * * 1,3'
+    - cron: '13 6 * * 1,3'
   workflow_dispatch:
 
 permissions:
