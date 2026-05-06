@@ -63,8 +63,10 @@ Streamlit Cloud sometimes pushes an automated commit back to the repo (`Added De
 The auto-refresh GitHub Action also pushes commits as `f1-data-refresh-bot` on Mon/Wed mornings; pull before starting work after those days.
 
 ## Data Refresh Schedule
-- **Monday 06:00 UTC** — catches Sunday race results once they've settled
-- **Wednesday 06:00 UTC** — catches mid-week steward decisions, DSQs, post-race penalty changes that retroactively shift positions
+- **Monday 06:13 UTC** — catches Sunday race results once they've settled
+- **Wednesday 06:13 UTC** — catches mid-week steward decisions, DSQs, post-race penalty changes that retroactively shift positions
+
+(Deliberately off-the-hour — the original `0 6 * * 1,3` cron hit a runner-acquisition failure on 2026-05-06 because GitHub's shared-runner pool is heavily oversubscribed at top-of-the-hour. Moved to `:13` which picks up cleanly almost always.)
 
 The action calls `load_season(conn, current_year)`, which uses `INSERT OR IGNORE` for existing rows so re-runs are idempotent — only new races and changed standings get added.
 
@@ -238,6 +240,14 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
 - [x] DRS naming retired — under 2026 regs DRS is replaced by manual override mode + active aero. Constant renamed `DRS_THRESHOLD_S` → `PROXIMITY_THRESHOLD_S`; verdict text updated. (2026-05-06)
 - [x] Removed misleading start/finish marker from circuit outlines — bacinger GeoJSON doesn't encode start/finish, so the marker on coords[0] was random per circuit (2026-05-05)
 - [x] Documentation refresh — README + CLAUDE.md (project-local) + project_notes.md created/updated
+- [x] Cron shift to 06:13 UTC after the Mon-of-week-of-2026-05-06 GitHub runner-pool flake (top-of-hour cron contention)
+- [x] **QA punch list (2026-05-06):**
+  - Fixed Standings → Points Accumulation double-cumsum bug (was showing 237 for Antonelli at R4 instead of 100). `driver_standings.points` is already a season-to-date total; chart now plots it directly.
+  - Era Comparison normalized chart now includes sprint points on both the actual and normalized sides via UNION + position re-mapping.
+  - Page H1s aligned with sidebar labels: "Historical Comparison" → "Era Comparison"; "Safety & DNF Statistics" → "DNF Analysis".
+  - Pitwall theme cleanup — replaced legacy `#E8002D` red with the new `#E10600` across `comparison_charts.py`, `12_Safety_Stats.py`, `7_GOAT_Calculator.py`, `6_Driver_Profiles.py`, `18_Driver_Profiles_Historical.py` (plus matching rgba fillcolors).
+  - Head-to-Head charts now use each driver's actual team colour instead of fixed red/blue. New helper `queries.drivers.get_latest_constructor()` resolves the latest team per driver; the comparison_charts functions accept optional `d1_color` / `d2_color` kwargs threaded through both H2H pages.
+  - Removed unused `PLOTLY_TEMPLATE` import from `pages/9_Race_Calendar.py`.
 
 ## In Progress / Next Steps
 - [ ] Unify pages still using "Season Tracker" / "Historical Comparison" / "Safety Stats" naming inside the page bodies (sidebar nav already renamed)
@@ -256,6 +266,7 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
 - [ ] Speed trap mini-leaderboard — top 5 by `i1_speed`/`st_speed` from the laps payload
 
 ## Known Issues / To Fix
+- **Trivia question repeats** — `pages/10_Trivia.py` picks each question via `ORDER BY RANDOM() LIMIT 1` with no exclusion list, so the same race / driver / circuit can come up multiple times in one 10-question session. Fix: track answered subjects in `st.session_state` and exclude them from subsequent picks. Queued.
 - **Track outline rotations** — orientations are geographically correct (North up) but don't match F1.com's stylized diagrams. Deferred — would need per-circuit rotation table.
 - **Track outline aspect at high latitudes** — Mercator squash. See above.
 - **Auto-refresh action** doesn't refresh `pit_stops` for new races. Pit stops are lazy-loaded by the Race Breakdown page on first visit per race (Jolpica returns them per round, not per season). Cold-start visitors hit a small delay.

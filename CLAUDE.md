@@ -49,6 +49,15 @@ Streamlit's `st.navigation` doesn't natively collapse section groups. `app.py` u
 ### Predictions live in the browser
 `pages/13_Predictions.py` uses `streamlit-local-storage` to keep predictions per-browser. The previous `predictions.json` on the server got wiped on Streamlit Cloud container restarts and was shared across all visitors. `STORAGE_KEY = "f1_predictions_v1"`.
 
+### `driver_standings.points` is already cumulative
+The Jolpica `/standings` endpoint returns season-to-date championship totals, not per-round points. So `driver_standings.points[round=4]` IS the total championship points after R4, not the points scored AT R4. **Don't `cumsum` on top of it** in charts that show progression — just plot it directly. (We hit this bug once on the Standings → Points Accumulation chart; Antonelli was reading 237 at R4 instead of his real 100.)
+
+### Sprint points must be unioned everywhere totals are summed
+Already covered above for career stats, but worth restating for normalized-points work: `get_normalized_season_points` UNIONs `results` + `sprint_results` and applies the target points system to BOTH sets of finishing positions, so both the actual and normalized totals match official championship behaviour.
+
+### Team-aware Head-to-Head colours
+`queries/drivers.py::get_latest_constructor(driver_id)` returns the constructor a driver most recently raced for. The H2H pages look up `TEAM_COLORS[<that id>]` and pass it through `season_comparison_bar`, `cumulative_wins_chart`, `h2h_qualifying_chart` as optional `d1_color` / `d2_color` kwargs. Falls back to the default red/blue palette if the team isn't in `TEAM_COLORS`.
+
 ### Live data caching
 Every function in `data/live.py` is wrapped in `@st.cache_data(ttl=...)` with a TTL sized to how fast the underlying data changes:
 - `intervals`, `position`: 10s (live race rate)
@@ -89,7 +98,7 @@ Page titles get an automatic red underline via the `h1` CSS rule. Section subhea
 - **Database is committed** (`f1_data.db`, ~544KB) so deploys ship with full historical data immediately.
 
 ### Auto-refresh action
-`.github/workflows/refresh-data.yml` runs Mondays + Wednesdays at 06:00 UTC. Calls `load_season(conn, current_year)`, commits any DB changes as `f1-data-refresh-bot`, pushes — which triggers a Streamlit Cloud redeploy. Manually triggerable from the Actions tab.
+`.github/workflows/refresh-data.yml` runs Mondays + Wednesdays at **06:13 UTC** (deliberately off the hour — top-of-the-hour cron times collide with GitHub's shared-runner pool and frequently fail with "could not acquire runner" or get delayed 30-90 minutes). Calls `load_season(conn, current_year)`, commits any DB changes as `f1-data-refresh-bot`, pushes — which triggers a Streamlit Cloud redeploy. Manually triggerable from the Actions tab.
 
 The Mon refresh catches Sunday race results once they've settled. The Wed refresh catches mid-week steward decisions, DSQs, post-race penalty changes that retroactively shift positions.
 
@@ -165,6 +174,9 @@ The Time-to-Strike block rebuilds the selectbox `key` based on the clicked row i
 - Don't write to `predictions.json` on the server
 - Don't drop the `legendgroup` / `legendgrouptitle_text` from multi-driver charts — they keep teammates grouped in the legend
 - Don't switch to `hovermode="x unified"` on the Standings charts — 22 drivers don't fit; we use the driver+teammate model instead
+
+## Known issues (queued)
+- **Trivia repeats questions** — `pages/10_Trivia.py` picks each round's question via `ORDER BY RANDOM() LIMIT 1` with no exclusion list, so the same race / driver / circuit can come up multiple times in one 10-question session. Fix: track answered questions in `st.session_state` and exclude already-asked subjects from subsequent picks.
 
 ## Future ideas (not started)
 - **Live track map** — driver dots on the racing line via OpenF1's `/v1/location`. Phased plan in `project_notes.md`.
