@@ -107,6 +107,9 @@ The Mon refresh catches Sunday race results once they've settled. The Wed refres
 
 The Live Race page shows a stale-data warning if the most-recent race in the DB is more than 14 days old.
 
+### Stale-deploy ImportError pattern
+If a page suddenly fails on the cloud with `ImportError` (message redacted) but imports cleanly locally and `git log origin/main..main` is empty, the most likely cause is that Streamlit Cloud cached a partial deploy — new page code referencing a name that the *old* helper module didn't have. **Reboot the app from share.streamlit.io → Manage app → Reboot** before debugging code. This usually clears it. Hit on 2026-05-06 right after the QA-pass commit added `get_latest_constructor` to both H2H pages and `queries/drivers.py` in the same commit; only the page side was loaded, so the import blew up.
+
 ## Page → File Map
 The sidebar labels and page titles don't always match the file names because we've renamed pages without renumbering the files:
 

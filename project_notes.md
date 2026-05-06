@@ -99,7 +99,7 @@ Two distinct data feeds:
 - `data/fetcher.py` + `data/loader.py` — pulls historical data from Jolpica into local SQLite. One-time on first launch, then refreshed by the auto-refresh action.
 - `data/live.py` — wraps OpenF1 endpoints with `@st.cache_data` per endpoint (TTLs 10–600s). Free-tier safe.
 
-Time-to-Strike compute lives in `queries/strike.py` as a pure function returning a `StrikeResult` dataclass. The Live Race page renders the dataclass; nothing in the math layer knows about Streamlit.
+Time-to-Strike compute lives in `queries/strike.py` as a pure function returning a `StrikeResult` dataclass. The Live Race page renders the dataclass; nothing in the math layer knows about Streamlit. The solver is degradation-aware — it fits a line over recent clean laps to recover each driver's base pace + per-lap deg slope, then walks forward lap by lap until cumulative pace advantage covers the gap. Collapses to the old flat `ceil(gap/Δpace)` when slopes are 0.
 
 Track outlines live in `data/track_geojson.py` — fetches from the bacinger repo at runtime, cached.
 
@@ -248,6 +248,9 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
   - Pitwall theme cleanup — replaced legacy `#E8002D` red with the new `#E10600` across `comparison_charts.py`, `12_Safety_Stats.py`, `7_GOAT_Calculator.py`, `6_Driver_Profiles.py`, `18_Driver_Profiles_Historical.py` (plus matching rgba fillcolors).
   - Head-to-Head charts now use each driver's actual team colour instead of fixed red/blue. New helper `queries.drivers.get_latest_constructor()` resolves the latest team per driver; the comparison_charts functions accept optional `d1_color` / `d2_color` kwargs threaded through both H2H pages.
   - Removed unused `PLOTLY_TEMPLATE` import from `pages/9_Race_Calendar.py`.
+- [x] **Trivia subject exclusion (2026-05-06)** — `pages/10_Trivia.py` was picking each question via `ORDER BY RANDOM() LIMIT 1` with no exclusion list, so the same race / driver / circuit could come up multiple times in a 10-question session. Now tracks subjects (race_id / driver_id / circuit_id) per session in `st.session_state.trivia_seen` and adds `NOT IN` clauses on each pick query. Exclusion is cross-type, so a driver picked for `first_win_year` won't reappear as the subject of `win_count`. Reset on Play Again.
+- [x] **Tire degradation in Time-to-Strike (2026-05-06)** — replaced the flat `ceil(gap / pace_delta)` with a lap-by-lap cumulative-advantage solver. New helpers in `queries/strike.py`: `_pace_and_deg` fits a line on the last 5 clean laps to recover (base_pace, deg_slope); `_laps_to_catch` walks forward, accumulating `(target_pace_k − chaser_pace_k)` until it covers the gap. With both slopes at 0 the math collapses to the old formula. Confidence layer factors in the deg-slope gap (`>= 0.05 s/lap²` widens the window, the inverse trims confidence) and adds an explanatory note. Live Race UI shows each driver's deg slope on the tire row. Returns `None` ("can't close") if the solver can't cover the gap within 80 projected laps — handles both the case where current pace is too thin AND the case where the chaser's own degradation will eat its advantage.
+- [x] **Stale-deploy reboot fix (2026-05-06)** — H2H page broke on the cloud with a redacted ImportError after the QA-pass commit. Code was correct locally and `origin/main` was in sync; cause was Streamlit Cloud cached a partial deploy where the new page imports loaded but the updated `queries/drivers.py` (with `get_latest_constructor`) didn't. Manual reboot from the dashboard fixed it. Documented the pattern in `CLAUDE.md` under "Stale-deploy ImportError pattern".
 
 ## In Progress / Next Steps
 - [ ] Unify pages still using "Season Tracker" / "Historical Comparison" / "Safety Stats" naming inside the page bodies (sidebar nav already renamed)
@@ -261,12 +264,10 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
   - Phase 3: calibrated overlay on the bacinger track outline. Requires per-circuit transformation matrix to map OpenF1's local meters → bacinger's lat/lng. Could also be derived automatically by bounding-box alignment.
 - [ ] Start/finish marker on track outlines — bacinger GeoJSON doesn't encode where start/finish is, so we can't reliably mark it. Removed the misleading marker from coords[0] for now. To put it back accurately we'd need either: (a) hand-curated index per circuit, or (b) use OpenF1 location data to find the actual timing line.
 - [ ] More live-race widgets: pit-window predictor, undercut/overcut calculator. (Note: under 2026 regs DRS is gone — overtaking uses manual override mode + active aero. No technical "within 1 second" trigger anymore.)
-- [ ] Tire degradation modeling for Time-to-Strike confidence
 - [ ] Team radio playback — OpenF1's `/v1/team_radio` returns recording URLs; embed an `<audio>` player for the most recent few clips
 - [ ] Speed trap mini-leaderboard — top 5 by `i1_speed`/`st_speed` from the laps payload
 
 ## Known Issues / To Fix
-- **Trivia question repeats** — `pages/10_Trivia.py` picks each question via `ORDER BY RANDOM() LIMIT 1` with no exclusion list, so the same race / driver / circuit can come up multiple times in one 10-question session. Fix: track answered subjects in `st.session_state` and exclude them from subsequent picks. Queued.
 - **Track outline rotations** — orientations are geographically correct (North up) but don't match F1.com's stylized diagrams. Deferred — would need per-circuit rotation table.
 - **Track outline aspect at high latitudes** — Mercator squash. See above.
 - **Auto-refresh action** doesn't refresh `pit_stops` for new races. Pit stops are lazy-loaded by the Race Breakdown page on first visit per race (Jolpica returns them per round, not per season). Cold-start visitors hit a small delay.
