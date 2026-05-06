@@ -15,7 +15,7 @@ from config import POINT_SYSTEMS
 
 init_db()
 
-st.title("Historical Comparison")
+st.title("Era Comparison")
 
 drivers = get_all_drivers()
 if not drivers:

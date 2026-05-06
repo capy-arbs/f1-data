@@ -51,17 +51,29 @@ def get_career_comparison(driver_ids: list[str]) -> pd.DataFrame:
 
 
 def get_normalized_season_points(driver_id: str, target_system: str = "2010-present") -> pd.DataFrame:
-    """Recalculate a driver's career points under a different point system."""
+    """Recalculate a driver's career points under a different point system.
+
+    Includes sprint races (2021+). For both the actual and normalized totals,
+    each finishing position — main race or sprint — gets re-mapped through
+    the target system's points table. The ``actual_points`` total matches
+    the official championship standings.
+    """
     with get_db() as conn:
         rows = conn.execute(
             """
-            SELECT r.season, res.position, res.points as actual_points
-            FROM results res
-            JOIN races r ON res.race_id = r.race_id
-            WHERE res.driver_id=?
-            ORDER BY r.season, r.round
+            SELECT season, position, actual_points FROM (
+                SELECT r.season, res.position, res.points AS actual_points
+                FROM results res
+                JOIN races r ON res.race_id = r.race_id
+                WHERE res.driver_id=?
+                UNION ALL
+                SELECT r.season, sr.position, sr.points AS actual_points
+                FROM sprint_results sr
+                JOIN races r ON sr.race_id = r.race_id
+                WHERE sr.driver_id=?
+            )
             """,
-            (driver_id,),
+            (driver_id, driver_id),
         ).fetchall()
 
     data = []

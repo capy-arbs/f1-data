@@ -144,9 +144,9 @@ if not season_df.empty:
         x=season_df["season"],
         y=season_df["cum_wins"],
         mode="lines+markers",
-        line=dict(color="#E8002D", width=3),
+        line=dict(color="#E10600", width=3),
         fill="tozeroy",
-        fillcolor="rgba(232, 0, 45, 0.15)",
+        fillcolor="rgba(225, 6, 0, 0.15)",
     ))
     fig.update_layout(
         template=PLOTLY_TEMPLATE,

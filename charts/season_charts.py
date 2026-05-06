@@ -141,8 +141,12 @@ def points_accumulation_chart(df: pd.DataFrame) -> go.Figure:
     df["driver"] = df["code"].fillna(df["family_name"])
     color_map = _build_color_map(df)
 
+    # NOTE: driver_standings.points is already a season-to-date total per
+    # round (championship cumulative), so we copy it through directly. Doing
+    # cumsum() on top would double-cumulate — Antonelli's R4 chart would
+    # read 237 instead of his real 100.
     df = df.sort_values(["driver", "round"])
-    df["cum_points"] = df.groupby("driver")["points"].cumsum()
+    df["cum_points"] = df["points"]
     lookup = _build_team_round_lookup(df, "cum_points")
 
     fig = go.Figure()

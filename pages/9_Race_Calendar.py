@@ -6,7 +6,6 @@ from datetime import datetime
 from db.schema import init_db
 from queries.standings import get_available_seasons
 from queries.circuits import get_race_calendar
-from config import PLOTLY_TEMPLATE
 
 init_db()
 

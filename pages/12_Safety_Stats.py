@@ -11,7 +11,7 @@ from config import PLOTLY_TEMPLATE
 
 init_db()
 
-st.title("Safety & DNF Statistics")
+st.title("DNF Analysis")
 
 MECHANICAL = {"Engine", "Gearbox", "Transmission", "Hydraulics", "Electrical",
               "Brakes", "Suspension", "Clutch", "Throttle", "Oil pressure",
@@ -76,7 +76,7 @@ col3.metric("DNF Rate", f"{100 * len(dnfs) / len(df):.1f}%")
 st.subheader("DNF Categories")
 cat_counts = dnfs["category"].value_counts().reset_index()
 cat_counts.columns = ["Category", "Count"]
-colors = {"Mechanical": "#E8002D", "Racing Incident": "#FF8000", "Other": "#888888"}
+colors = {"Mechanical": "#E10600", "Racing Incident": "#FF8000", "Other": "#888888"}
 
 fig = px.pie(
     cat_counts, values="Count", names="Category",
@@ -110,8 +110,8 @@ season_stats["dnf_rate"] = 100 * season_stats["dnfs"] / season_stats["total"]
 fig = go.Figure()
 fig.add_trace(go.Scatter(
     x=season_stats["season"], y=season_stats["dnf_rate"],
-    mode="lines+markers", line=dict(color="#E8002D", width=2),
-    fill="tozeroy", fillcolor="rgba(232, 0, 45, 0.15)",
+    mode="lines+markers", line=dict(color="#E10600", width=2),
+    fill="tozeroy", fillcolor="rgba(225, 6, 0, 0.15)",
 ))
 fig.update_layout(
     template=PLOTLY_TEMPLATE, xaxis_title="Season",
@@ -126,7 +126,7 @@ race_by_season = dnfs[dnfs["category"] == "Racing Incident"].groupby("season").s
 breakdown = pd.merge(mech_by_season, race_by_season, on="season", how="outer").fillna(0)
 
 fig = go.Figure()
-fig.add_trace(go.Bar(x=breakdown["season"], y=breakdown["Mechanical"], name="Mechanical", marker_color="#E8002D"))
+fig.add_trace(go.Bar(x=breakdown["season"], y=breakdown["Mechanical"], name="Mechanical", marker_color="#E10600"))
 fig.add_trace(go.Bar(x=breakdown["season"], y=breakdown["Racing Incident"], name="Racing Incident", marker_color="#FF8000"))
 fig.update_layout(
     template=PLOTLY_TEMPLATE, barmode="stack",

@@ -12,6 +12,7 @@ from queries.drivers import (
     get_driver_seasons,
     get_head_to_head,
     get_teammate_seasons,
+    get_latest_constructor,
 )
 from queries.standings import get_available_seasons
 from charts.comparison_charts import (
@@ -19,6 +20,7 @@ from charts.comparison_charts import (
     cumulative_wins_chart,
     h2h_qualifying_chart,
 )
+from config import TEAM_COLORS
 
 init_db()
 
@@ -43,6 +45,10 @@ d2_id = driver_options[d2_name]
 if d1_id == d2_id:
     st.warning("Pick two different drivers!")
     st.stop()
+
+# Look up each driver's most-recent team colour for chart theming.
+d1_color = TEAM_COLORS.get(get_latest_constructor(d1_id) or "")
+d2_color = TEAM_COLORS.get(get_latest_constructor(d2_id) or "")
 
 # Data coverage warning
 loaded_seasons = set(get_available_seasons())
@@ -103,12 +109,12 @@ for col, (label, key) in zip(cols, metrics):
 st.subheader("Points by Season")
 d1_seasons = get_season_stats(d1_id)
 d2_seasons = get_season_stats(d2_id)
-fig = season_comparison_bar(d1_seasons, d2_seasons, d1_name, d2_name)
+fig = season_comparison_bar(d1_seasons, d2_seasons, d1_name, d2_name, d1_color, d2_color)
 st.plotly_chart(fig, use_container_width=True)
 
 # Cumulative wins
 st.subheader("Cumulative Wins")
-fig = cumulative_wins_chart(d1_seasons, d2_seasons, d1_name, d2_name)
+fig = cumulative_wins_chart(d1_seasons, d2_seasons, d1_name, d2_name, d1_color, d2_color)
 st.plotly_chart(fig, use_container_width=True)
 
 # Head-to-head in same races
@@ -135,7 +141,7 @@ if not teammate_df.empty:
 
     # Qualifying H2H
     st.markdown("**Qualifying Head-to-Head**")
-    fig = h2h_qualifying_chart(teammate_df, d1_name, d2_name)
+    fig = h2h_qualifying_chart(teammate_df, d1_name, d2_name, d1_color, d2_color)
     st.plotly_chart(fig, use_container_width=True)
 
     # Race finish H2H

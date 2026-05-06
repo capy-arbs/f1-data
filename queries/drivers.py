@@ -22,6 +22,26 @@ def _sprint_points_total(driver_id: str) -> float:
     return float(row["p"]) if row else 0.0
 
 
+def get_latest_constructor(driver_id: str) -> str | None:
+    """Constructor a driver most recently raced for. Used for team-aware
+    coloring on head-to-head charts so each driver's bar uses their actual
+    team's livery instead of a fixed red/blue palette.
+    """
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT res.constructor_id
+            FROM results res
+            JOIN races r ON res.race_id = r.race_id
+            WHERE res.driver_id = ?
+            ORDER BY r.season DESC, r.round DESC
+            LIMIT 1
+            """,
+            (driver_id,),
+        ).fetchone()
+    return row["constructor_id"] if row else None
+
+
 def _sprint_points_by_season(driver_id: str) -> dict[int, float]:
     """Per-season sprint points for a driver, keyed by year."""
     with get_db() as conn:

@@ -163,7 +163,7 @@ st.subheader("Top 5 — Radar Comparison")
 top5 = df.head(5)
 categories = ["Wins", "Podiums", "Poles", "Pts/Race", "Win Rate", "Titles", "Longevity"]
 norm_cols = ["n_wins", "n_podiums", "n_poles", "n_ppr", "n_winrate", "n_champs", "n_longevity"]
-colors = ["#E8002D", "#3671C6", "#27F4D2", "#FF8000", "#229971"]
+colors = ["#E10600", "#3671C6", "#27F4D2", "#FF8000", "#229971"]
 
 fig = go.Figure()
 for i, (_, row) in enumerate(top5.iterrows()):
