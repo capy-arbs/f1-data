@@ -230,6 +230,14 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
 - [x] Gap-to-fastest chart instead of rank-bar chart
 - [x] Stacked pit-stop chart with outlier filtering
 - [x] Audi + Cadillac team colors for 2026
+- [x] Live session detection — red LIVE badge in header, auto-refresh defaults ON during a live session, 10s interval pre-selected (2026-05-05)
+- [x] Driver + teammate hover model on Standings/Momentum charts (replaced unified-hover that clipped 22 entries off-screen)
+- [x] Sector colours on Live standings — purple = session best, green = personal best (2026-05-06)
+- [x] Click-to-fill Time-to-Strike — clicking any standings row sets that driver as the chaser and the driver one position ahead as the target (2026-05-06)
+- [x] Position movement strip — "Up: VER +3 (P12→P9)" / "Down: ALO -2 (P5→P7)" over the last 5 minutes (2026-05-06)
+- [x] DRS naming retired — under 2026 regs DRS is replaced by manual override mode + active aero. Constant renamed `DRS_THRESHOLD_S` → `PROXIMITY_THRESHOLD_S`; verdict text updated. (2026-05-06)
+- [x] Removed misleading start/finish marker from circuit outlines — bacinger GeoJSON doesn't encode start/finish, so the marker on coords[0] was random per circuit (2026-05-05)
+- [x] Documentation refresh — README + CLAUDE.md (project-local) + project_notes.md created/updated
 
 ## In Progress / Next Steps
 - [ ] Unify pages still using "Season Tracker" / "Historical Comparison" / "Safety Stats" naming inside the page bodies (sidebar nav already renamed)
@@ -244,6 +252,8 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
 - [ ] Start/finish marker on track outlines — bacinger GeoJSON doesn't encode where start/finish is, so we can't reliably mark it. Removed the misleading marker from coords[0] for now. To put it back accurately we'd need either: (a) hand-curated index per circuit, or (b) use OpenF1 location data to find the actual timing line.
 - [ ] More live-race widgets: pit-window predictor, undercut/overcut calculator. (Note: under 2026 regs DRS is gone — overtaking uses manual override mode + active aero. No technical "within 1 second" trigger anymore.)
 - [ ] Tire degradation modeling for Time-to-Strike confidence
+- [ ] Team radio playback — OpenF1's `/v1/team_radio` returns recording URLs; embed an `<audio>` player for the most recent few clips
+- [ ] Speed trap mini-leaderboard — top 5 by `i1_speed`/`st_speed` from the laps payload
 
 ## Known Issues / To Fix
 - **Track outline rotations** — orientations are geographically correct (North up) but don't match F1.com's stylized diagrams. Deferred — would need per-circuit rotation table.

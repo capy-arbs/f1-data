@@ -127,6 +127,32 @@ The numeric prefixes on the files no longer affect routing or order — `app.py`
 - **Drivers** group in the nav: filtered to the most-recent season's grid via `queries/drivers.py::get_current_drivers()`.
 - **Records & History** group: full archive via `get_all_drivers()`. Same rendering, different filter.
 
+## Live Race page conventions
+
+### Live session detection
+`pages/14_Live_Race.py::_is_live(sess)` checks whether the session is currently in progress (current UTC between `date_start` and `date_end`). Used to:
+- Show a red "LIVE" badge in the header
+- Default the auto-refresh checkbox to ON
+- Pre-select the 10s refresh interval (vs 15s for archived sessions)
+
+`_time_since_end(sess)` formats human-readable "ended 2h ago" / "ended 3d ago" suffixes for finished-session headers.
+
+### Sector colours on standings
+S1/S2/S3 columns coloured via pandas `Styler.apply`:
+- Purple (`rgba(139, 92, 246, 0.45)`) = session-best for that sector
+- Green (`rgba(34, 197, 94, 0.35)`) = personal-best for that driver/sector
+- Default = no colour
+
+Bests are computed once from the full `laps` frame: session-best is `laps["duration_sector_N"].min()`, personal-best is per-driver `min()`. Comparisons round to 3dp because OpenF1 sometimes returns extra trailing precision.
+
+### Click-to-fill Time-to-Strike
+Standings dataframe uses `selection_mode="single-row"` + `on_select="rerun"`. Clicking any row populates the chaser picker with that driver and defaults the target to whoever is one position ahead. The selectboxes still allow override.
+
+The Time-to-Strike block rebuilds the selectbox `key` based on the clicked row index — this forces Streamlit to re-render with the new default rather than keeping the user's previous selection sticky.
+
+### Position movement strip
+"Up: VER +3 (P12→P9)" / "Down: ALO -2 (P5→P7)" computed over the last 5 minutes of `position` events. Uses the data's own max timestamp as "now" rather than wall-clock time so the widget works on archived sessions too. Empty when nothing has changed in the window.
+
 ## Verification
 - `streamlit run app.py` then click each section
 - For the Time-to-Strike feature: defaults to the latest OpenF1 session; will fall back to the most recent completed race when no live race is running, so the page is never empty
@@ -141,9 +167,11 @@ The numeric prefixes on the files no longer affect routing or order — `app.py`
 - Don't switch to `hovermode="x unified"` on the Standings charts — 22 drivers don't fit; we use the driver+teammate model instead
 
 ## Future ideas (not started)
-- Manual-override deployment / proximity widget (sub-second gaps highlighted)
+- **Live track map** — driver dots on the racing line via OpenF1's `/v1/location`. Phased plan in `project_notes.md`.
 - Pit-window predictor (best lap to pit given tire age + traffic)
 - Undercut/overcut calculator
 - Tire degradation modeling for Time-to-Strike (currently flat-line pace)
 - Equal-area projection for track outlines (Mercator-squash at high latitude)
 - Per-circuit rotation table to match F1.com's stylized track diagrams
+- Accurate start/finish marker on track outlines (bacinger GeoJSON doesn't encode the line — would need hand-curated index per circuit or OpenF1 timing-line data)
+- Team radio playback — OpenF1's `team_radio` endpoint returns audio URLs
