@@ -7,10 +7,61 @@ most recent session so the page is always populated.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import streamlit as st
+
+
+def _is_live(sess: dict) -> bool:
+    """Whether ``sess`` is currently in progress.
+
+    OpenF1 returns ISO-8601 datetimes for date_start / date_end. We compare
+    against current UTC. Treat any error or missing field as "not live" so
+    the page degrades to its archived-session UX rather than crashing.
+    """
+    try:
+        start = sess.get("date_start")
+        end = sess.get("date_end")
+        if not start or not end:
+            return False
+        if isinstance(start, str):
+            start = datetime.fromisoformat(start)
+        if isinstance(end, str):
+            end = datetime.fromisoformat(end)
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        return start <= now <= end
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
+def _time_since_end(sess: dict) -> str | None:
+    """Human-friendly 'ended X ago' string for a finished session."""
+    try:
+        end = sess.get("date_end")
+        if not end:
+            return None
+        if isinstance(end, str):
+            end = datetime.fromisoformat(end)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        delta: timedelta = datetime.now(timezone.utc) - end
+        if delta.total_seconds() < 0:
+            return None
+        days = delta.days
+        hours = delta.seconds // 3600
+        if days > 0:
+            return f"{days}d ago"
+        if hours > 0:
+            return f"{hours}h ago"
+        mins = delta.seconds // 60
+        return f"{mins}m ago"
+    except (TypeError, ValueError, AttributeError):
+        return None
 
 from db.schema import init_db
 from data.live import (
@@ -95,8 +146,21 @@ with st.sidebar:
         sess = sessions_df[sessions_df["label"] == choice].iloc[0].to_dict()
 
     st.divider()
-    auto_refresh = st.checkbox("Auto-refresh", value=False, help="Re-runs the page on a fixed interval.")
-    interval = st.select_slider("Interval (s)", options=[10, 15, 30, 60], value=15, disabled=not auto_refresh)
+    # Live detection: if the session is currently in progress, default the
+    # refresh ON and pick a tighter interval so users land on a live race
+    # and immediately see updates without having to flip a toggle.
+    live_now = _is_live(sess)
+    auto_refresh = st.checkbox(
+        "Auto-refresh",
+        value=live_now,
+        help="Re-runs the page on a fixed interval. On by default during a live session.",
+    )
+    interval = st.select_slider(
+        "Interval (s)",
+        options=[10, 15, 30, 60],
+        value=10 if live_now else 15,
+        disabled=not auto_refresh,
+    )
     refresh = st.button("Refresh now", use_container_width=True)
 
 
@@ -112,7 +176,19 @@ if refresh:
 # -- Header strip ----------------------------------------------------------
 
 header_cols = st.columns([3, 1, 1, 1])
-header_cols[0].subheader(session_label)
+# LIVE badge or "ended X ago" subtitle next to the session name.
+if live_now:
+    header_cols[0].markdown(
+        f"### {session_label}  "
+        f"<span style='background:#E10600; color:#fff; padding:2px 10px; "
+        f"border-radius:3px; font-size:0.65em; letter-spacing:0.1em; "
+        f"font-weight:700; vertical-align:middle;'>LIVE</span>",
+        unsafe_allow_html=True,
+    )
+else:
+    elapsed = _time_since_end(sess)
+    suffix = f" — ended {elapsed}" if elapsed else ""
+    header_cols[0].subheader(f"{session_label}{suffix}")
 
 drivers = get_drivers(session_key)
 intervals = get_intervals(session_key)
