@@ -11,27 +11,49 @@ init_db()
 st.title("F1 Trivia Quiz")
 
 
-def generate_question(conn) -> dict | None:
-    """Generate a random trivia question from the database."""
-    qtype = random.choice(["race_winner", "first_win_year", "win_count", "circuit_country"])
+def _placeholders(values) -> str:
+    return ",".join("?" * len(values))
 
+
+def generate_question(conn, seen: dict) -> dict | None:
+    """Generate a random trivia question, skipping subjects already asked.
+
+    ``seen`` carries per-kind id sets across one quiz session so the same
+    race / driver / circuit doesn't show up twice — even across question
+    types (e.g. a driver in `first_win_year` won't reappear in `win_count`).
+    """
+    # Try each type in random order so we don't get stuck if one is exhausted
+    # for the loaded data.
+    types = ["race_winner", "first_win_year", "win_count", "circuit_country"]
+    random.shuffle(types)
+
+    for qtype in types:
+        q = _try_question(conn, qtype, seen)
+        if q is not None:
+            return q
+    return None
+
+
+def _try_question(conn, qtype: str, seen: dict) -> dict | None:
     if qtype == "race_winner":
-        # "Who won the [year] [race name]?"
+        seen_races = seen["races"]
+        excl = f"AND r.race_id NOT IN ({_placeholders(seen_races)})" if seen_races else ""
         race = conn.execute(
-            """
-            SELECT r.season, r.race_name, d.given_name || ' ' || d.family_name as winner,
+            f"""
+            SELECT r.race_id, r.season, r.race_name,
+                   d.given_name || ' ' || d.family_name as winner,
                    d.driver_id
             FROM results res
             JOIN races r ON res.race_id = r.race_id
             JOIN drivers d ON res.driver_id = d.driver_id
-            WHERE res.position = 1
+            WHERE res.position = 1 {excl}
             ORDER BY RANDOM() LIMIT 1
-            """
+            """,
+            list(seen_races),
         ).fetchone()
         if not race:
             return None
 
-        # Get 3 wrong answers from drivers who raced that year
         wrong = conn.execute(
             """
             SELECT DISTINCT d.given_name || ' ' || d.family_name as name
@@ -50,22 +72,27 @@ def generate_question(conn) -> dict | None:
             "question": f"Who won the {race['season']} {race['race_name']}?",
             "options": options,
             "answer": race["winner"],
+            "subject_kind": "races",
+            "subject_id": race["race_id"],
         }
 
-    elif qtype == "first_win_year":
-        # "In what year did [driver] win their first race?"
+    if qtype == "first_win_year":
+        seen_drivers = seen["drivers"]
+        excl = f"AND res.driver_id NOT IN ({_placeholders(seen_drivers)})" if seen_drivers else ""
         driver = conn.execute(
-            """
-            SELECT d.given_name || ' ' || d.family_name as name,
+            f"""
+            SELECT res.driver_id,
+                   d.given_name || ' ' || d.family_name as name,
                    MIN(r.season) as first_win_year
             FROM results res
             JOIN races r ON res.race_id = r.race_id
             JOIN drivers d ON res.driver_id = d.driver_id
-            WHERE res.position = 1
+            WHERE res.position = 1 {excl}
             GROUP BY res.driver_id
             HAVING COUNT(*) >= 3
             ORDER BY RANDOM() LIMIT 1
-            """
+            """,
+            list(seen_drivers),
         ).fetchone()
         if not driver:
             return None
@@ -80,20 +107,26 @@ def generate_question(conn) -> dict | None:
             "question": f"In what year did {driver['name']} win their first Grand Prix?",
             "options": options,
             "answer": str(correct),
+            "subject_kind": "drivers",
+            "subject_id": driver["driver_id"],
         }
 
-    elif qtype == "win_count":
-        # "How many wins does [driver] have?"
+    if qtype == "win_count":
+        seen_drivers = seen["drivers"]
+        excl = f"WHERE res.driver_id NOT IN ({_placeholders(seen_drivers)})" if seen_drivers else ""
         driver = conn.execute(
-            """
-            SELECT d.given_name || ' ' || d.family_name as name,
+            f"""
+            SELECT res.driver_id,
+                   d.given_name || ' ' || d.family_name as name,
                    SUM(CASE WHEN res.position = 1 THEN 1 ELSE 0 END) as wins
             FROM results res
             JOIN drivers d ON res.driver_id = d.driver_id
+            {excl}
             GROUP BY res.driver_id
             HAVING wins >= 5
             ORDER BY RANDOM() LIMIT 1
-            """
+            """,
+            list(seen_drivers),
         ).fetchone()
         if not driver:
             return None
@@ -108,16 +141,20 @@ def generate_question(conn) -> dict | None:
             "question": f"How many Grand Prix wins does {driver['name']} have?",
             "options": options,
             "answer": str(correct),
+            "subject_kind": "drivers",
+            "subject_id": driver["driver_id"],
         }
 
-    elif qtype == "circuit_country":
-        # "In which country is [circuit]?"
+    if qtype == "circuit_country":
+        seen_circuits = seen["circuits"]
+        excl = f"AND circuit_id NOT IN ({_placeholders(seen_circuits)})" if seen_circuits else ""
         circuit = conn.execute(
-            """
-            SELECT name, country FROM circuits
-            WHERE country IS NOT NULL
+            f"""
+            SELECT circuit_id, name, country FROM circuits
+            WHERE country IS NOT NULL {excl}
             ORDER BY RANDOM() LIMIT 1
-            """
+            """,
+            list(seen_circuits),
         ).fetchone()
         if not circuit:
             return None
@@ -137,6 +174,8 @@ def generate_question(conn) -> dict | None:
             "question": f"In which country is the {circuit['name']}?",
             "options": options,
             "answer": circuit["country"],
+            "subject_kind": "circuits",
+            "subject_id": circuit["circuit_id"],
         }
 
     return None
@@ -153,6 +192,8 @@ if "trivia_answered" not in st.session_state:
     st.session_state.trivia_answered = False
 if "trivia_finished" not in st.session_state:
     st.session_state.trivia_finished = False
+if "trivia_seen" not in st.session_state:
+    st.session_state.trivia_seen = {"races": set(), "drivers": set(), "circuits": set()}
 
 TOTAL_QUESTIONS = 10
 
@@ -188,16 +229,18 @@ if st.session_state.trivia_finished:
         st.session_state.trivia_question = None
         st.session_state.trivia_answered = False
         st.session_state.trivia_finished = False
+        st.session_state.trivia_seen = {"races": set(), "drivers": set(), "circuits": set()}
         st.rerun()
     st.stop()
 
 # Generate new question if needed
 if st.session_state.trivia_question is None:
     with get_db() as conn:
-        q = generate_question(conn)
+        q = generate_question(conn, st.session_state.trivia_seen)
     if q is None:
         st.warning("Not enough data to generate questions. Load more seasons!")
         st.stop()
+    st.session_state.trivia_seen[q["subject_kind"]].add(q["subject_id"])
     st.session_state.trivia_question = q
     st.session_state.trivia_answered = False
 

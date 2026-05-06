@@ -455,13 +455,22 @@ else:
         m4.metric("Target pace", f"{result.target_pace:.3f}s" if result.target_pace else "—")
 
         f = result.factors
+
+        def _tire_line(prefix: str) -> str:
+            comp = f.get(f"{prefix}_compound") or "—"
+            age = f.get(f"{prefix}_tyre_age")
+            age_s = f"age {age} laps" if age is not None else "age —"
+            slope = f.get(f"{prefix}_deg_slope")
+            deg_s = f"deg {slope:+.2f}s/lap" if slope is not None else "deg —"
+            return f"{comp} | {age_s} | {deg_s}"
+
         f_cols = st.columns(2)
         with f_cols[0]:
             st.markdown("**Chaser tires**")
-            st.write(f"{f.get('chaser_compound') or '—'} | age {f.get('chaser_tyre_age') if f.get('chaser_tyre_age') is not None else '—'} laps")
+            st.write(_tire_line("chaser"))
         with f_cols[1]:
             st.markdown("**Target tires**")
-            st.write(f"{f.get('target_compound') or '—'} | age {f.get('target_tyre_age') if f.get('target_tyre_age') is not None else '—'} laps")
+            st.write(_tire_line("target"))
 
         if result.notes:
             with st.expander("Why this verdict", expanded=True):

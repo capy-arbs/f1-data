@@ -1,19 +1,22 @@
 """Time-to-Strike: predict when a chasing driver will catch a target.
 
-The core formula is intentionally simple so the output stays interpretable:
+Core idea: walk forward lap by lap, accumulating per-lap pace advantage
+until it exceeds the current gap. With flat pace this collapses to
+``ceil(gap / pace_delta)``; with degradation slopes it accounts for both
+drivers' lap times trending up over the next stint.
 
-    laps_to_catch = ceil(gap_seconds / pace_advantage_per_lap)
+Per lap k, projected pace = base_pace + deg_slope * k. The chaser catches
+the target on the smallest k such that
 
-Where ``pace_advantage_per_lap = pace(target) - pace(chaser)`` measured in
-seconds per lap from recent clean laps. We then layer on signals — tire age
-delta, lap-time consistency, close proximity, target's stint phase — to produce
-a confidence label. The math is exposed in the returned ``factors`` dict so
-the UI can show *why* it expects a given outcome rather than just a number.
+    sum_{i=1..k} (target_pace_i - chaser_pace_i)  >=  gap_seconds
+
+Both ``base_pace`` and ``deg_slope`` come from a linear fit on recent clean
+laps (pit-out and outlier-slow laps stripped). Confidence and tire-age
+notes still layer on top so the UI can show *why* a verdict was given.
 """
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field, asdict
 
 import numpy as np
@@ -95,6 +98,54 @@ def _pace(laps_df: pd.DataFrame, driver_number: int, window: int = PACE_WINDOW) 
     return float(clean["lap_duration"].mean())
 
 
+def _pace_and_deg(
+    laps_df: pd.DataFrame,
+    driver_number: int,
+    current_lap: int,
+    window: int = PACE_WINDOW,
+) -> tuple[float | None, float | None]:
+    """Projected pace at ``current_lap`` plus per-lap degradation slope.
+
+    Returns ``(pace_at_current_lap, slope_s_per_lap)``. With ≥3 clean laps
+    we fit a line and read the projected lap time at ``current_lap`` plus
+    its slope. With exactly 2 clean laps we return the mean and slope=0
+    (not enough points to fit reliably). Returns ``(None, None)`` if pace
+    can't be estimated at all.
+    """
+    clean = _clean_laps(laps_df, driver_number, window=window)
+    if clean.empty or len(clean) < 2:
+        return None, None
+    if len(clean) < 3:
+        return float(clean["lap_duration"].mean()), 0.0
+    x = clean["lap_number"].astype(float).values
+    y = clean["lap_duration"].astype(float).values
+    slope, intercept = np.polyfit(x, y, 1)
+    pace_now = intercept + slope * current_lap
+    return float(pace_now), float(slope)
+
+
+def _laps_to_catch(
+    gap: float,
+    chaser_pace: float, target_pace: float,
+    chaser_deg: float, target_deg: float,
+    max_laps: int = 80,
+) -> int | None:
+    """Smallest k such that cumulative pace advantage over k future laps ≥ gap.
+
+    Pace at future lap k for each driver is ``base + deg * k``. With both
+    slopes at zero this matches the flat ``ceil(gap / pace_delta)``.
+    Returns ``None`` if the cumulative advantage never reaches the gap
+    within ``max_laps`` (chaser can't close).
+    """
+    cumulative = 0.0
+    for k in range(1, max_laps + 1):
+        delta_k = (target_pace + target_deg * k) - (chaser_pace + chaser_deg * k)
+        cumulative += delta_k
+        if cumulative >= gap:
+            return k
+    return None
+
+
 def _consistency(laps_df: pd.DataFrame, driver_number: int) -> float | None:
     """Stdev of recent clean laps. Lower = more consistent = higher confidence."""
     clean = _clean_laps(laps_df, driver_number, window=PACE_WINDOW)
@@ -155,6 +206,8 @@ def _confidence_label(
     chaser_age: int | None,
     target_age: int | None,
     gap: float,
+    chaser_deg: float | None = None,
+    target_deg: float | None = None,
 ) -> tuple[str, list[str]]:
     """Heuristic confidence rating with human-readable factors driving it."""
     notes: list[str] = []
@@ -189,6 +242,18 @@ def _confidence_label(
         elif diff <= -5:
             score -= 1
             notes.append(f"Target is {abs(diff)} laps fresher — degradation may flip the gap")
+
+    # Degradation slope gap — target falling off faster than chaser opens
+    # the window even further; the reverse closes it. ~0.05 s/lap per lap
+    # (i.e. a half-second gap after 10 laps) is the threshold of "material".
+    if chaser_deg is not None and target_deg is not None:
+        deg_diff = target_deg - chaser_deg
+        if deg_diff >= 0.05:
+            score += 1
+            notes.append(f"Target degrading {deg_diff:+.2f} s/lap² faster — gap will widen")
+        elif deg_diff <= -0.05:
+            score -= 1
+            notes.append(f"Chaser degrading {-deg_diff:.2f} s/lap² faster — pace advantage will fade")
 
     # Sub-second gap — overtake window is open.
     if gap <= PROXIMITY_THRESHOLD_S:
@@ -244,8 +309,9 @@ def compute_strike(
     )
 
     gap = _gap_between(intervals_df, chaser_number, target_number)
-    chaser_pace = _pace(laps_df, chaser_number)
-    target_pace = _pace(laps_df, target_number)
+    current_lap = int(laps_df["lap_number"].max()) if not laps_df.empty else 0
+    chaser_pace, chaser_deg = _pace_and_deg(laps_df, chaser_number, current_lap)
+    target_pace, target_deg = _pace_and_deg(laps_df, target_number, current_lap)
 
     result.gap_seconds = gap
     result.chaser_pace = chaser_pace
@@ -258,6 +324,8 @@ def compute_strike(
         "chaser_tyre_age": chaser_tire["tyre_age"],
         "target_compound": target_tire["compound"],
         "target_tyre_age": target_tire["tyre_age"],
+        "chaser_deg_slope": chaser_deg,
+        "target_deg_slope": target_deg,
     }
 
     # Bail-out conditions ---------------------------------------------------
@@ -275,20 +343,30 @@ def compute_strike(
     pace_delta = target_pace - chaser_pace
     result.pace_delta = pace_delta
 
-    if pace_delta <= 0.05:
-        # Chaser isn't meaningfully faster — even a tiny pace deficit means no catch.
+    deg_slopes_known = chaser_deg is not None and target_deg is not None
+    deg_diff = (target_deg - chaser_deg) if deg_slopes_known else 0.0
+    laps_to_catch = _laps_to_catch(
+        gap, chaser_pace, target_pace,
+        chaser_deg or 0.0, target_deg or 0.0,
+    )
+
+    if laps_to_catch is None:
+        # Cumulative advantage never closes the gap within the projection window.
         result.verdict = f"{result.chaser} can't close on current pace"
-        result.confidence = "high" if pace_delta < -0.1 else "low"
-        result.notes.append(
-            f"Pace delta is {pace_delta:+.2f} s/lap. "
-            "Catching requires the target to slow (degradation, traffic, pit) or the chaser to find time."
-        )
+        result.confidence = "high" if pace_delta < -0.1 and deg_diff <= 0 else "low"
+        if pace_delta <= 0.05 and deg_diff <= 0:
+            result.notes.append(
+                f"Pace delta is {pace_delta:+.2f} s/lap and tire degradation isn't favourable. "
+                "Catching requires the target to slow (traffic, pit, mistake) or the chaser to find time."
+            )
+        else:
+            result.notes.append(
+                f"Pace delta {pace_delta:+.2f} s/lap, deg gap {deg_diff:+.3f} s/lap² — "
+                "not enough cumulative time to close the gap within the projection window."
+            )
         return result
 
-    laps_to_catch = math.ceil(gap / pace_delta)
     eta_seconds = laps_to_catch * chaser_pace
-
-    current_lap = int(laps_df["lap_number"].max()) if not laps_df.empty else 0
     on_lap = current_lap + laps_to_catch
     laps_remaining = (total_laps - current_lap) if total_laps else None
 
@@ -313,6 +391,8 @@ def compute_strike(
         chaser_age=chaser_tire["tyre_age"],
         target_age=target_tire["tyre_age"],
         gap=gap,
+        chaser_deg=chaser_deg,
+        target_deg=target_deg,
     )
     result.confidence = confidence
     result.notes.extend(why)

@@ -71,14 +71,17 @@ Every function in `data/live.py` is wrapped in `@st.cache_data(ttl=...)` with a 
 Manual "Refresh now" button on Live Race calls `fn.clear()` on each cached fetcher to bypass TTLs.
 
 ### Time-to-Strike formula
-Implemented in `queries/strike.py` as a pure function returning `StrikeResult`. Core math:
+Implemented in `queries/strike.py` as a pure function returning `StrikeResult`. The solver walks forward lap by lap, accumulating per-lap pace advantage until it covers the current gap:
 ```
-laps_to_catch = ceil(gap_seconds / (target_pace − chaser_pace))
+catches on smallest k such that
+  Σ_{i=1..k} (target_pace_i − chaser_pace_i) >= gap_seconds
+where pace_i for each driver = base_pace + deg_slope * i
 ```
 - `gap_seconds` = chaser's `gap_to_leader` − target's `gap_to_leader`
-- `pace` = mean lap-time over last 5 clean laps (drops pit-out laps and laps > 1.05× the driver's median over a 10-lap window)
+- `base_pace` and `deg_slope` come from a linear fit on the last 5 clean laps (pit-out and outlier-slow laps stripped). With <3 clean laps the slope falls back to 0 and the math collapses to the old flat-pace `ceil(gap / Δpace)`.
+- Returns `None` (→ "can't close") when the cumulative advantage never covers the gap within 80 projected laps. This handles the case where current pace_delta is small but degradation closes the gap — and the inverse, where the chaser is currently faster but is degrading harder.
 
-Confidence label (high/medium/low) is heuristic from pace-delta magnitude, lap-time stdev, tire-age delta, close proximity (sub-second gaps). The function fills `result.notes[]` so the UI can show *why* a verdict was given. Don't make the lap count itself smarter — add new signals to the confidence/notes layer instead.
+Confidence label (high/medium/low) is heuristic from pace-delta magnitude, lap-time stdev, tire-age delta, **deg-slope gap** (target degrading faster widens the window), and close proximity (sub-second gaps). The function fills `result.notes[]` so the UI can show *why* a verdict was given.
 
 **2026 reg note:** DRS no longer exists; overtaking uses manual override mode (electrical boost) plus active aero. There's no "within 1 second" technical trigger anymore, but a sub-second gap still indicates "overtake imminent" because slipstream + override windows favour the chaser at that range. The constant in `strike.py` is named `PROXIMITY_THRESHOLD_S`, not the legacy `DRS_THRESHOLD_S`.
 
@@ -175,14 +178,10 @@ The Time-to-Strike block rebuilds the selectbox `key` based on the clicked row i
 - Don't drop the `legendgroup` / `legendgrouptitle_text` from multi-driver charts — they keep teammates grouped in the legend
 - Don't switch to `hovermode="x unified"` on the Standings charts — 22 drivers don't fit; we use the driver+teammate model instead
 
-## Known issues (queued)
-- **Trivia repeats questions** — `pages/10_Trivia.py` picks each round's question via `ORDER BY RANDOM() LIMIT 1` with no exclusion list, so the same race / driver / circuit can come up multiple times in one 10-question session. Fix: track answered questions in `st.session_state` and exclude already-asked subjects from subsequent picks.
-
 ## Future ideas (not started)
 - **Live track map** — driver dots on the racing line via OpenF1's `/v1/location`. Phased plan in `project_notes.md`.
 - Pit-window predictor (best lap to pit given tire age + traffic)
 - Undercut/overcut calculator
-- Tire degradation modeling for Time-to-Strike (currently flat-line pace)
 - Equal-area projection for track outlines (Mercator-squash at high latitude)
 - Per-circuit rotation table to match F1.com's stylized track diagrams
 - Accurate start/finish marker on track outlines (bacinger GeoJSON doesn't encode the line — would need hand-curated index per circuit or OpenF1 timing-line data)
