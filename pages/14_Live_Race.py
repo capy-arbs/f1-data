@@ -223,14 +223,42 @@ st.divider()
 
 grid = build_live_grid(drivers, positions, intervals, laps, stints)
 
+# Session bests + per-driver personal bests for sector colouring (S1/S2/S3).
+# Computed once from the full laps frame and merged into the standings row.
+session_best = {
+    "s1": float(laps["duration_sector_1"].min()) if not laps.empty and "duration_sector_1" in laps else None,
+    "s2": float(laps["duration_sector_2"].min()) if not laps.empty and "duration_sector_2" in laps else None,
+    "s3": float(laps["duration_sector_3"].min()) if not laps.empty and "duration_sector_3" in laps else None,
+}
+
+# Most recent lap's sector splits per driver.
+if not laps.empty:
+    last_lap_per_driver = (
+        laps.dropna(subset=["lap_duration"])
+        .sort_values(["driver_number", "lap_number"])
+        .groupby("driver_number", as_index=False)
+        .tail(1)[["driver_number", "duration_sector_1", "duration_sector_2", "duration_sector_3"]]
+    )
+    pb_per_driver = laps.groupby("driver_number").agg(
+        pb_s1=("duration_sector_1", "min"),
+        pb_s2=("duration_sector_2", "min"),
+        pb_s3=("duration_sector_3", "min"),
+    ).reset_index()
+else:
+    last_lap_per_driver = pd.DataFrame(columns=["driver_number", "duration_sector_1", "duration_sector_2", "duration_sector_3"])
+    pb_per_driver = pd.DataFrame(columns=["driver_number", "pb_s1", "pb_s2", "pb_s3"])
+
 st.subheader("Live standings")
+standings_event = None  # populated by the dataframe row-select event below
 if grid.empty or "position" not in grid.columns:
     st.info("Standings unavailable for this session.")
 else:
     show = grid.dropna(subset=["position"]).copy()
     show = show.sort_values("position")
+    show = show.merge(last_lap_per_driver, on="driver_number", how="left")
+    show = show.merge(pb_per_driver, on="driver_number", how="left")
+
     show["Pos"] = show["position"].astype("Int64")
-    show["#"] = show["driver_number"]
     show["Driver"] = show["name_acronym"].fillna(show["full_name"])
     show["Team"] = show["team_name"]
     show["Gap"] = show["gap_to_leader"].apply(
@@ -239,6 +267,9 @@ else:
     show["Interval"] = show["interval"].apply(
         lambda v: f"+{v:.3f}" if pd.notna(v) else "—"
     )
+    show["S1"] = show["duration_sector_1"].apply(lambda v: f"{v:.3f}" if pd.notna(v) else "—")
+    show["S2"] = show["duration_sector_2"].apply(lambda v: f"{v:.3f}" if pd.notna(v) else "—")
+    show["S3"] = show["duration_sector_3"].apply(lambda v: f"{v:.3f}" if pd.notna(v) else "—")
     show["Last Lap"] = show["lap_duration"].apply(
         lambda v: f"{v:.3f}" if pd.notna(v) else "—"
     )
@@ -246,11 +277,94 @@ else:
         lambda r: f"{r['compound']} ({int(r['tyre_age'])})" if pd.notna(r.get("compound")) and pd.notna(r.get("tyre_age")) else "—",
         axis=1,
     )
-    st.dataframe(
-        show[["Pos", "#", "Driver", "Team", "Gap", "Interval", "Last Lap", "Tire"]],
+
+    visible_cols = ["Pos", "Driver", "Team", "Gap", "Interval", "S1", "S2", "S3", "Last Lap", "Tire"]
+
+    # Sector-color styler: purple = session best, green = personal best,
+    # default for everything else. Ties broken by rounding to 3dp since
+    # OpenF1 returns floats with extra trailing precision.
+    def _sector_style(val, sb, pb) -> str:
+        if pd.isna(val):
+            return ""
+        try:
+            v = round(float(val), 3)
+        except (TypeError, ValueError):
+            return ""
+        if sb is not None and round(sb, 3) == v:
+            return "background-color: rgba(139, 92, 246, 0.45); color: #fff; font-weight: 600"
+        if pb is not None and round(pb, 3) == v:
+            return "background-color: rgba(34, 197, 94, 0.35); color: #fff; font-weight: 600"
+        return ""
+
+    def _row_styles(row) -> list[str]:
+        styles: dict[str, str] = {
+            "S1": _sector_style(row.get("duration_sector_1"), session_best["s1"], row.get("pb_s1")),
+            "S2": _sector_style(row.get("duration_sector_2"), session_best["s2"], row.get("pb_s2")),
+            "S3": _sector_style(row.get("duration_sector_3"), session_best["s3"], row.get("pb_s3")),
+        }
+        return [styles.get(col, "") for col in visible_cols]
+
+    styled = show[visible_cols + ["duration_sector_1", "duration_sector_2", "duration_sector_3",
+                                  "pb_s1", "pb_s2", "pb_s3"]].style.apply(
+        _row_styles, axis=1, subset=visible_cols
+    )
+
+    # selection_mode + on_select="rerun" lets us read a row click and use it
+    # to populate the Time-to-Strike pickers below.
+    standings_event = st.dataframe(
+        styled,
+        column_order=visible_cols,
         hide_index=True,
         use_container_width=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        key="standings_table",
     )
+
+    st.caption(
+        "Click any row to set that driver as the **Chaser** in Time-to-Strike. "
+        "Sectors: <span style='color:#8B5CF6;font-weight:700'>purple</span> = session best, "
+        "<span style='color:#22c55e;font-weight:700'>green</span> = personal best.",
+        unsafe_allow_html=True,
+    )
+
+    # -- Recent position changes ------------------------------------------
+    # Look at the last 5 minutes of position events and surface gainers /
+    # losers. For finished sessions we use the data's own max timestamp as
+    # "now" so the window still works against archived data.
+    if not positions.empty:
+        latest_ts = positions["date"].max()
+        cutoff = latest_ts - pd.Timedelta(minutes=5)
+        latest_pos = (
+            positions.sort_values("date")
+            .groupby("driver_number").tail(1)
+            .set_index("driver_number")["position"]
+        )
+        earlier_pos = (
+            positions[positions["date"] <= cutoff]
+            .sort_values("date")
+            .groupby("driver_number").tail(1)
+            .set_index("driver_number")["position"]
+        )
+        common = latest_pos.index.intersection(earlier_pos.index)
+        if len(common) > 0:
+            deltas = (earlier_pos.loc[common] - latest_pos.loc[common]).rename("delta")
+            deltas = deltas[deltas != 0]
+            if not deltas.empty:
+                # Map driver_number -> acronym for display
+                acro_map = drivers.set_index("driver_number")["name_acronym"].to_dict() if not drivers.empty else {}
+                gainers = []
+                losers = []
+                for drv_num, d in deltas.sort_values(ascending=False).items():
+                    acro = acro_map.get(drv_num, str(drv_num))
+                    old = int(earlier_pos.loc[drv_num])
+                    new = int(latest_pos.loc[drv_num])
+                    label = f"**{acro}** {'+' if d > 0 else ''}{int(d)} (P{old}→P{new})"
+                    (gainers if d > 0 else losers).append(label)
+                col_g, col_l = st.columns(2)
+                col_g.markdown(f"**Up:** {' · '.join(gainers) if gainers else '—'}")
+                col_l.markdown(f"**Down:** {' · '.join(losers) if losers else '—'}")
+                st.caption("Position movement over the last 5 minutes")
 
 
 # -- Time-to-Strike widget -------------------------------------------------
@@ -273,13 +387,32 @@ else:
     if len(keys) < 2:
         st.info("Need at least two drivers with current data.")
     else:
-        c1, c2 = st.columns(2)
-        # Default chaser to P2, target to P1.
+        # Click-to-fill: if the user clicked a row in the standings table
+        # above, default the chaser to that driver and the target to whoever
+        # is one position ahead. Falls back to P2 chasing P1 otherwise.
         default_chaser_idx = 1 if len(keys) > 1 else 0
         default_target_idx = 0
-        chaser_label = c1.selectbox("Chaser", keys, index=default_chaser_idx, key="strike_chaser")
-        # Filter target to drivers ahead of chaser by default-friendly logic, but keep all selectable.
-        target_label = c2.selectbox("Target (driver ahead)", keys, index=default_target_idx, key="strike_target")
+        clicked_rows = (
+            standings_event.selection.rows
+            if standings_event is not None and hasattr(standings_event, "selection")
+            else []
+        )
+        if clicked_rows:
+            clicked_position = clicked_rows[0] + 1  # row index 0 == P1
+            # Map P{n} key prefixes back to keys list indices.
+            for i, k in enumerate(keys):
+                if k.startswith(f"P{clicked_position}:"):
+                    default_chaser_idx = i
+                    break
+            target_position = max(1, clicked_position - 1)
+            for i, k in enumerate(keys):
+                if k.startswith(f"P{target_position}:"):
+                    default_target_idx = i
+                    break
+
+        c1, c2 = st.columns(2)
+        chaser_label = c1.selectbox("Chaser", keys, index=default_chaser_idx, key=f"strike_chaser_{default_chaser_idx}")
+        target_label = c2.selectbox("Target (driver ahead)", keys, index=default_target_idx, key=f"strike_target_{default_target_idx}")
 
         chaser_n = options[chaser_label]
         target_n = options[target_label]

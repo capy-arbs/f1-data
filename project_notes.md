@@ -242,7 +242,7 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
   - Phase 2: smooth animation between samples (Plotly animation frames or fast refresh loop).
   - Phase 3: calibrated overlay on the bacinger track outline. Requires per-circuit transformation matrix to map OpenF1's local meters → bacinger's lat/lng. Could also be derived automatically by bounding-box alignment.
 - [ ] Start/finish marker on track outlines — bacinger GeoJSON doesn't encode where start/finish is, so we can't reliably mark it. Removed the misleading marker from coords[0] for now. To put it back accurately we'd need either: (a) hand-curated index per circuit, or (b) use OpenF1 location data to find the actual timing line.
-- [ ] More live-race widgets: DRS detection (gap < 1.0s), pit-window predictor, undercut/overcut calculator
+- [ ] More live-race widgets: pit-window predictor, undercut/overcut calculator. (Note: under 2026 regs DRS is gone — overtaking uses manual override mode + active aero. No technical "within 1 second" trigger anymore.)
 - [ ] Tire degradation modeling for Time-to-Strike confidence
 
 ## Known Issues / To Fix

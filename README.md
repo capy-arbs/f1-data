@@ -22,7 +22,7 @@ laps_to_catch = ceil(gap_seconds / (target_pace - chaser_pace))
 
 - **gap_seconds** — chaser's `gap_to_leader` minus target's, taken from the most recent OpenF1 intervals snapshot.
 - **pace** — mean lap time over the last 5 clean laps. Pit-out laps and any lap more than 5% slower than the driver's own median are dropped to reject yellow-flag noise.
-- **confidence** label (high / medium / low) layered on top, derived from the pace-delta magnitude, lap-time consistency, tire-age delta, and DRS proximity. Every verdict ships with a bulleted list of *why* — so you can tell when the model is confident vs. when it's about to be wrong.
+- **confidence** label (high / medium / low) layered on top, derived from the pace-delta magnitude, lap-time consistency, tire-age delta, and close proximity (sub-second gaps signal overtake range). Every verdict ships with a bulleted list of *why* — so you can tell when the model is confident vs. when it's about to be wrong.
 
 If the chaser isn't actually faster, the widget says so plainly ("can't close on current pace") rather than producing a meaningless number.
 

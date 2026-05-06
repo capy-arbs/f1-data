@@ -69,7 +69,9 @@ laps_to_catch = ceil(gap_seconds / (target_pace − chaser_pace))
 - `gap_seconds` = chaser's `gap_to_leader` − target's `gap_to_leader`
 - `pace` = mean lap-time over last 5 clean laps (drops pit-out laps and laps > 1.05× the driver's median over a 10-lap window)
 
-Confidence label (high/medium/low) is heuristic from pace-delta magnitude, lap-time stdev, tire-age delta, DRS proximity. The function fills `result.notes[]` so the UI can show *why* a verdict was given. Don't make the lap count itself smarter — add new signals to the confidence/notes layer instead.
+Confidence label (high/medium/low) is heuristic from pace-delta magnitude, lap-time stdev, tire-age delta, close proximity (sub-second gaps). The function fills `result.notes[]` so the UI can show *why* a verdict was given. Don't make the lap count itself smarter — add new signals to the confidence/notes layer instead.
+
+**2026 reg note:** DRS no longer exists; overtaking uses manual override mode (electrical boost) plus active aero. There's no "within 1 second" technical trigger anymore, but a sub-second gap still indicates "overtake imminent" because slipstream + override windows favour the chaser at that range. The constant in `strike.py` is named `PROXIMITY_THRESHOLD_S`, not the legacy `DRS_THRESHOLD_S`.
 
 ## Theme
 Pitwall — broadcast-style dark. F1 red (#E10600) on near-black (#0A0B0F).
@@ -139,7 +141,7 @@ The numeric prefixes on the files no longer affect routing or order — `app.py`
 - Don't switch to `hovermode="x unified"` on the Standings charts — 22 drivers don't fit; we use the driver+teammate model instead
 
 ## Future ideas (not started)
-- DRS detection widget (gap < 1.0s = highlight)
+- Manual-override deployment / proximity widget (sub-second gaps highlighted)
 - Pit-window predictor (best lap to pit given tire age + traffic)
 - Undercut/overcut calculator
 - Tire degradation modeling for Time-to-Strike (currently flat-line pace)

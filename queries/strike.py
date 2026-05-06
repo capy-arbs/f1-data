@@ -6,7 +6,7 @@ The core formula is intentionally simple so the output stays interpretable:
 
 Where ``pace_advantage_per_lap = pace(target) - pace(chaser)`` measured in
 seconds per lap from recent clean laps. We then layer on signals — tire age
-delta, lap-time consistency, DRS proximity, target's stint phase — to produce
+delta, lap-time consistency, close proximity, target's stint phase — to produce
 a confidence label. The math is exposed in the returned ``factors`` dict so
 the UI can show *why* it expects a given outcome rather than just a number.
 """
@@ -29,8 +29,12 @@ PACE_WINDOW = 5
 # the driver's median over the window before computing the mean.
 OUTLIER_FACTOR = 1.05
 
-# DRS detection is approximate — within 1.0s = within DRS range.
-DRS_THRESHOLD_S = 1.0
+# Proximity threshold (seconds). Under 2026 regs DRS is gone — overtaking
+# uses manual override (electrical boost) instead, deployable anywhere with
+# charge. There's no "within 1 second" technical trigger anymore, but a sub-
+# second gap still indicates "overtake imminent" because slipstream and
+# manual-override windows favour the chaser at that range.
+PROXIMITY_THRESHOLD_S = 1.0
 
 
 @dataclass
@@ -186,9 +190,9 @@ def _confidence_label(
             score -= 1
             notes.append(f"Target is {abs(diff)} laps fresher — degradation may flip the gap")
 
-    # DRS proximity boost.
-    if gap <= DRS_THRESHOLD_S:
-        notes.append("Already in DRS range — overtake imminent")
+    # Sub-second gap — overtake window is open.
+    if gap <= PROXIMITY_THRESHOLD_S:
+        notes.append("Within 1 second — slipstream + override range")
         score += 1
 
     if score >= 3:
@@ -295,8 +299,8 @@ def compute_strike(
 
     if laps_remaining is not None and laps_to_catch > laps_remaining:
         result.verdict = f"Won't catch before flag (needs {laps_to_catch}, only {laps_remaining} left)"
-    elif laps_to_catch <= 1 and gap <= DRS_THRESHOLD_S:
-        result.verdict = f"In DRS — overtake imminent"
+    elif laps_to_catch <= 1 and gap <= PROXIMITY_THRESHOLD_S:
+        result.verdict = f"Within 1 second — overtake imminent"
     elif laps_to_catch == 1:
         result.verdict = f"Catches {result.target} on the next lap"
     else:
