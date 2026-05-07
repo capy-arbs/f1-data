@@ -13,11 +13,12 @@ Live at https://box-box.streamlit.app. Personal project, public repo, free Strea
 - **bacinger/f1-circuits** GeoJSON for track outlines
 - **streamlit-local-storage** component for browser-side persisted predictions
 
-Three-layer code structure:
+Layered code structure:
 - `data/` — fetch + persistence
 - `queries/` — pure SQL/compute helpers, no Streamlit
 - `charts/` — Plotly figure builders, take DataFrames return Figures
-- `pages/` — Streamlit views, orchestrate the above
+- `views/` — shared page renderers used by more than one page (e.g. the current-grid + historical Driver Profiles / Head-to-Head pairs both call into one renderer here). When you find yourself copying a whole page to make a "historical" or "alternate-filter" variant, put the body in `views/` and let each page be a thin shim.
+- `pages/` — Streamlit pages. Pages should stay thin: `init_db()`, fetch the input set (e.g. drivers list), call into a `views/` renderer with title/caption/data. Inline SQL or chart-building inside a page is a smell — push it down a layer.
 
 ## Key Patterns & Conventions
 

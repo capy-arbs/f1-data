@@ -86,13 +86,14 @@ The Home/Live Race page shows a "data may be stale" warning if the most-recent r
 
 ## Architecture
 
-Three layers, one job each:
+Layered, one job each:
 
 ```
 data/      raw fetch + persistence (Jolpica REST + OpenF1 REST + GeoJSON)
 queries/   pure SQL/compute helpers — no Streamlit, no I/O beyond the DB
 charts/    Plotly figure builders — take DataFrames in, return Figures out
-pages/     Streamlit views — orchestrate queries + charts, handle UI state
+views/     shared page renderers used by more than one page (e.g. Driver Profiles and Historical Driver Profiles both call into views/driver_profile.py with different driver lists + titles)
+pages/     Streamlit pages — thin shims: init the DB, fetch the input set, call a views/ renderer. Inline SQL or chart-building in a page is a smell.
 ```
 
 Two distinct data feeds:
@@ -176,6 +177,10 @@ charts/
   comparison_charts.py         H2H bars, cumulative wins, radar charts
   live_charts.py               Stint Gantt, pace trace, gap evolution
 
+views/
+  driver_profile.py            Shared renderer for Driver Profiles + Historical Driver Profiles
+  head_to_head.py              Shared renderer for Head-to-Head + Historical Head-to-Head
+
 pages/                         18 Streamlit pages (see Pages section)
 ```
 
@@ -251,6 +256,8 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
 - [x] **Trivia subject exclusion (2026-05-06)** — `pages/10_Trivia.py` was picking each question via `ORDER BY RANDOM() LIMIT 1` with no exclusion list, so the same race / driver / circuit could come up multiple times in a 10-question session. Now tracks subjects (race_id / driver_id / circuit_id) per session in `st.session_state.trivia_seen` and adds `NOT IN` clauses on each pick query. Exclusion is cross-type, so a driver picked for `first_win_year` won't reappear as the subject of `win_count`. Reset on Play Again.
 - [x] **Tire degradation in Time-to-Strike (2026-05-06)** — replaced the flat `ceil(gap / pace_delta)` with a lap-by-lap cumulative-advantage solver. New helpers in `queries/strike.py`: `_pace_and_deg` fits a line on the last 5 clean laps to recover (base_pace, deg_slope); `_laps_to_catch` walks forward, accumulating `(target_pace_k − chaser_pace_k)` until it covers the gap. With both slopes at 0 the math collapses to the old formula. Confidence layer factors in the deg-slope gap (`>= 0.05 s/lap²` widens the window, the inverse trims confidence) and adds an explanatory note. Live Race UI shows each driver's deg slope on the tire row. Returns `None` ("can't close") if the solver can't cover the gap within 80 projected laps — handles both the case where current pace is too thin AND the case where the chaser's own degradation will eat its advantage.
 - [x] **Stale-deploy reboot fix (2026-05-06)** — H2H page broke on the cloud with a redacted ImportError after the QA-pass commit. Code was correct locally and `origin/main` was in sync; cause was Streamlit Cloud cached a partial deploy where the new page imports loaded but the updated `queries/drivers.py` (with `get_latest_constructor`) didn't. Manual reboot from the dashboard fixed it. Documented the pattern in `CLAUDE.md` under "Stale-deploy ImportError pattern".
+- [x] **Driver Profiles + Head-to-Head dedupe (2026-05-07)** — the current/historical page pairs (`pages/6` ↔ `pages/18`, `pages/3` ↔ `pages/19`) were ~99% byte-identical, differing only in title/caption and `get_current_drivers` vs `get_all_drivers`. Extracted the shared bodies to a new `views/` layer (`views/driver_profile.py`, `views/head_to_head.py`) and reduced each of the four pages to a 13-line shim that calls `render(drivers, title, caption)`. Net: ~670 lines collapsed to ~351 with zero behaviour change. Stat additions or chart tweaks now touch one renderer instead of two pages, killing the drift risk that contributed to the 2026-05-06 ImportError.
+- [x] **Jolpica pagination cap fix + 2022–2025 backfill (2026-05-07)** — discovered while spot-checking Max's career stats in the refactored Driver Profiles page: every modern season had only 5–6 rounds of `results`/`qualifying`/`sprint_results` populated. Two compounding bugs in `data/fetcher.py::_get`: (1) we requested `limit=1000` per page, but Jolpica silently caps page size at 100, so each fetch returned only ~5 races' worth of result rows; (2) the loop incremented `offset += limit` (the requested 1000) instead of the served limit (100), so the `offset >= total` exit condition tripped after one page. Fix: clamp the requested limit to 100 and advance offset by the API-echoed `served_limit`. Also added a 429 retry loop with exponential backoff after Jolpica rate-limited the backfill mid-stream. Backfilled 2022–2025 by deleting the stale `fetch_log` rows and re-running `load_season()` for each year — `INSERT OR IGNORE` filled in the missing rounds without disturbing the rows already there. Result counts went from 5–6 rounds/season to full coverage (22/22, 22/22, 24/24, 24/24). DB grew from ~544KB → ~944KB. Note: the durable `_already_fetched()` fix (so past years re-check their round counts instead of trusting fetch_log forever) is still pending.
 
 ## In Progress / Next Steps
 - [ ] Unify pages still using "Season Tracker" / "Historical Comparison" / "Safety Stats" naming inside the page bodies (sidebar nav already renamed)

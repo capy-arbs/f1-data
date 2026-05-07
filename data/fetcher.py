@@ -6,27 +6,39 @@ import requests
 from config import API_BASE_URL, API_RATE_LIMIT_DELAY
 
 
-def _get(endpoint: str, limit: int = 1000) -> list[dict]:
-    """Fetch all pages from an API endpoint, respecting rate limits."""
+def _get(endpoint: str, limit: int = 100) -> list[dict]:
+    """Fetch all pages from an API endpoint, respecting rate limits.
+
+    Jolpica caps page size at 100 regardless of the requested ``limit`` — advancing
+    ``offset`` by the requested limit instead of the served limit caused
+    pagination to exit after one page, leaving full seasons stuck at ~5 rounds.
+    """
+    limit = min(limit, 100)
     results = []
     offset = 0
     while True:
         url = f"{API_BASE_URL}/{endpoint}.json?limit={limit}&offset={offset}"
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
+        backoff = 2.0
+        while True:
+            resp = requests.get(url, timeout=30)
+            if resp.status_code == 429:
+                retry_after = float(resp.headers.get("Retry-After", backoff))
+                time.sleep(retry_after)
+                backoff = min(backoff * 2, 60)
+                continue
+            resp.raise_for_status()
+            break
         data = resp.json()["MRData"]
         total = int(data["total"])
+        served_limit = int(data.get("limit", limit)) or limit
 
-        # The actual data is nested under a key like "RaceTable", "StandingsTable", etc.
         table_key = [k for k in data if k.endswith("Table")][0]
         table = data[table_key]
-
-        # The list is under a key like "Races", "StandingsLists", etc.
         list_key = [k for k in table if isinstance(table[k], list)][0]
         items = table[list_key]
         results.extend(items)
 
-        offset += limit
+        offset += served_limit
         if offset >= total:
             break
         time.sleep(API_RATE_LIMIT_DELAY)
