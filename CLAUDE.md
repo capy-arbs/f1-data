@@ -38,6 +38,9 @@ Wins/podiums/poles stay main-race-only by F1 convention (sprint wins are tracked
 ### OpenF1 strings vs floats
 `gap_to_leader` and `interval` come back as strings like `"+1 LAP"` for lapped cars. `data/live.py::get_intervals` coerces with `pd.to_numeric(errors="coerce")` so lapped values become NaN — handled downstream by Time-to-Strike's gap calc.
 
+### Jolpica caps `limit` at 100 silently
+Requesting `limit=1000` returns only 100 rows; the API echoes `"limit": 100` in the response without erroring. `data/fetcher.py::_get` clamps the requested limit to 100 and advances `offset` by the **served** limit (read back from the response), not the requested one — otherwise the `offset >= total` exit condition trips after a single page. Hit on 2026-05-07: every 2022–2025 season was stuck at ~5 rounds of `results`/`qualifying`/`sprint_results` because the loop quit early. The fix is paired with a 429 retry loop with exponential backoff (Jolpica rate-limits hard during long backfills) — `Retry-After` is honoured if present.
+
 ### `pd.merge_asof` chokes on NaN keys
 Drop NaN dates before any time-series merge. Used in `gap_evolution_chart`.
 
