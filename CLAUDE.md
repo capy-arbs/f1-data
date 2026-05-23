@@ -11,7 +11,6 @@ Live at https://box-box.streamlit.app. Personal project, public repo, free Strea
 - **Jolpica API** for historical (`api.jolpi.ca/ergast/f1`)
 - **OpenF1 API** for live timing (`api.openf1.org/v1` — 3 req/s, 30 req/min free tier)
 - **bacinger/f1-circuits** GeoJSON for track outlines
-- **streamlit-local-storage** component for browser-side persisted predictions
 
 Layered code structure:
 - `data/` — fetch + persistence
@@ -23,7 +22,7 @@ Layered code structure:
 ## Key Patterns & Conventions
 
 ### Sprint points are in a separate table
-`results.points` is **main-race only**. Sprint points live in `sprint_results.points`. Anywhere we sum points for a championship total — career stats, season stats, GOAT scores, momentum totals — we have to UNION with `sprint_results` or the totals don't match the official standings. This bug has been hit twice. Helpers in `queries/drivers.py`:
+`results.points` is **main-race only**. Sprint points live in `sprint_results.points`. Anywhere we sum points for a championship total — career stats, season stats, momentum totals, head-to-head, teammate-points, What-If simulations — we have to UNION with `sprint_results` or the totals don't match the official standings. This has bitten us repeatedly; the audit on 2026-05-23 caught three lingering violations (`queries/drivers.py::get_head_to_head`, `queries/drivers.py::get_teammate_seasons`, `pages/8_What_If.py::get_season_results`) that have since been fixed. Helpers in `queries/drivers.py`:
 - `_sprint_points_total(driver_id)` — career-long sprint points
 - `_sprint_points_by_season(driver_id)` — per-year dict
 
@@ -49,9 +48,6 @@ Streamlit's `st.navigation` doesn't natively collapse section groups. `app.py` u
 
 ### Plotly modebar is monkey-patched
 `app.py` patches `st.plotly_chart` so every chart gets `displayModeBar=True` and `displaylogo=False` without touching the 37 individual call sites.
-
-### Predictions live in the browser
-`pages/13_Predictions.py` uses `streamlit-local-storage` to keep predictions per-browser. The previous `predictions.json` on the server got wiped on Streamlit Cloud container restarts and was shared across all visitors. `STORAGE_KEY = "f1_predictions_v1"`.
 
 ### `driver_standings.points` is already cumulative
 The Jolpica `/standings` endpoint returns season-to-date championship totals, not per-round points. So `driver_standings.points[round=4]` IS the total championship points after R4, not the points scored AT R4. **Don't `cumsum` on top of it** in charts that show progression — just plot it directly. (We hit this bug once on the Standings → Points Accumulation chart; Antonelli was reading 237 at R4 instead of his real 100.)
@@ -128,16 +124,12 @@ The sidebar labels and page titles don't always match the file names because we'
 | Driver Profiles (current)    | pages/6_Driver_Profiles.py            |
 | Head-to-Head (current)       | pages/3_Head_to_Head.py               |
 | Circuit Map                  | pages/5_Circuit_Map.py                |
-| GOAT Calculator              | pages/7_GOAT_Calculator.py            |
 | What-If Simulator            | pages/8_What_If.py                    |
-| Trivia                       | pages/10_Trivia.py                    |
-| Prediction Tracker           | pages/13_Predictions.py               |
 | Historical Driver Profiles   | pages/18_Driver_Profiles_Historical.py|
 | Historical Head-to-Head      | pages/19_Head_to_Head_Historical.py   |
 | Era Comparison               | pages/4_Historical.py                 |
 | Pit Stop Records             | pages/15_Pit_Stop_Records.py          |
 | Lap Time Evolution           | pages/17_Lap_Time_Evolution.py        |
-| DNF Analysis                 | pages/12_Safety_Stats.py              |
 | Load Data                    | pages/0_Load_Data.py                  |
 
 The numeric prefixes on the files no longer affect routing or order — `app.py`'s `GROUPS` dict is the single source of truth. The numbers are kept for compatibility / file-tree readability.
@@ -181,7 +173,6 @@ The Time-to-Strike block rebuilds the selectbox `key` based on the clicked row i
 ## Don't
 - Don't add docstrings or comments that re-state what well-named code already says
 - Don't add fallback paths for things that can't happen (frameworks have invariants — trust them)
-- Don't write to `predictions.json` on the server
 - Don't drop the `legendgroup` / `legendgrouptitle_text` from multi-driver charts — they keep teammates grouped in the legend
 - Don't switch to `hovermode="x unified"` on the Standings charts — 22 drivers don't fit; we use the driver+teammate model instead
 

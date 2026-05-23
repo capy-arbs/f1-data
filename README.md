@@ -51,10 +51,7 @@ A "closest battles" leaderboard runs the same calculation across every adjacent 
 - **Circuit Map** — F1.com-style track outlines (via the open-source bacinger/f1-circuits GeoJSON dataset), race history, and per-circuit records. Current/Past picker above the dropdown.
 
 ### Play
-- **GOAT Calculator** — Weighted ranking with adjustable sliders and radar charts.
 - **What-If Simulator** — Three thought experiments: give one driver another driver's whole season; replay a season under any historical points system; or override a single race's result and watch the standings cascade.
-- **Trivia** — 10 randomly generated questions per round, drawn from the database.
-- **Prediction Tracker** — Log podium predictions before each race; the dashboard scores them once results land. Stored in your browser, not the server.
 
 ### Records & History
 - **Historical Driver Profiles** — Full archive of every driver in the database.
@@ -62,7 +59,6 @@ A "closest battles" leaderboard runs the same calculation across every adjacent 
 - **Era Comparison** — Cross-era stats with normalized point systems and all-time records.
 - **Pit Stop Records** — Fastest pit-stop leaderboard (2011+ data), filterable by season and team.
 - **Lap Time Evolution** — Year-over-year fastest race lap at any circuit. Reveals regulation-era pace shifts.
-- **DNF Analysis** — Retirement trends, mechanical vs racing incidents, circuit danger rankings.
 
 ### Settings
 - **Load Data** — Manually pull seasons from the Jolpica API.
@@ -150,7 +146,7 @@ charts/
   comparison_charts.py H2H bars, cumulative wins, radar charts
   live_charts.py       Stint Gantt, pace trace, gap evolution
 
-pages/              18 Streamlit pages
+pages/              14 Streamlit pages
 ```
 
 ## License

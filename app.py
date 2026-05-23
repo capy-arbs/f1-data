@@ -176,10 +176,7 @@ GROUPS: list[tuple[str, list[st.Page]]] = [
         st.Page("pages/5_Circuit_Map.py", title="Circuit Map"),
     ]),
     ("Play", [
-        st.Page("pages/7_GOAT_Calculator.py", title="GOAT Calculator"),
         st.Page("pages/8_What_If.py", title="What-If Simulator"),
-        st.Page("pages/10_Trivia.py", title="Trivia"),
-        st.Page("pages/13_Predictions.py", title="Prediction Tracker"),
     ]),
     ("Records & History", [
         st.Page("pages/18_Driver_Profiles_Historical.py", title="Historical Driver Profiles"),
@@ -187,7 +184,6 @@ GROUPS: list[tuple[str, list[st.Page]]] = [
         st.Page("pages/4_Historical.py", title="Era Comparison"),
         st.Page("pages/15_Pit_Stop_Records.py", title="Pit Stop Records"),
         st.Page("pages/17_Lap_Time_Evolution.py", title="Lap Time Evolution"),
-        st.Page("pages/12_Safety_Stats.py", title="DNF Analysis"),
     ]),
     ("Settings", [
         st.Page("pages/0_Load_Data.py", title="Load Data"),
