@@ -187,26 +187,15 @@ stints = get_stints(session_key)
 weather = get_weather(session_key)
 rc = get_race_control(session_key)
 
-# Surface OpenF1 failures so the page doesn't just look broken when the
-# feed is gated (401 during live sessions for unauthenticated users since
-# 2026-05-23) or unreachable.
+# Surface FastF1 load failures so the page doesn't just look broken when
+# the upstream feed is unavailable or a session isn't loadable yet.
 _status = feed_status()
-if _status["code"] == 401:
+if _status["code"] is not None:
     st.warning(
-        "**OpenF1 live data is gated right now.** "
-        f"{_status['message']} "
-        "Set the `OPENF1_API_KEY` environment variable with a paid OpenF1 API key "
-        "(https://openf1.org) to unlock live-session data. Historical pages "
-        "(Standings, Race Breakdown, etc.) still work without it."
+        f"**Live feed unavailable.** {_status['message']} "
+        "Try again in a few seconds — historical pages "
+        "(Standings, Race Breakdown, Driver Profiles) are unaffected."
     )
-elif _status["code"] == "network":
-    st.warning(
-        f"**Can't reach OpenF1 right now.** {_status['message']} "
-        "Try again in a few seconds — the auto-refresh will pick it up "
-        "as soon as the feed is back."
-    )
-elif _status["code"] not in (None,):
-    st.warning(f"**OpenF1 error.** {_status['message']}")
 
 current_lap = int(laps["lap_number"].max()) if not laps.empty else 0
 header_cols[1].metric("Current Lap", current_lap if current_lap else "—")
