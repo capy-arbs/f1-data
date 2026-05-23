@@ -197,8 +197,12 @@ def list_sessions(year: int | None = None) -> pd.DataFrame:
     df = pd.DataFrame(rows)
     if df.empty:
         return df
-    df["date_start"] = pd.to_datetime(df["date_start"], errors="coerce")
-    df["date_end"] = pd.to_datetime(df["date_end"], errors="coerce")
+    # FastF1's schedule returns timezone-aware datetimes in the local
+    # circuit timezone (e.g. +11:00 for Australia). Normalize to naive
+    # UTC so downstream comparisons (get_latest_session, _is_live) don't
+    # mix tz-aware vs tz-naive and trigger pandas TypeError.
+    df["date_start"] = pd.to_datetime(df["date_start"], errors="coerce", utc=True).dt.tz_localize(None)
+    df["date_end"] = pd.to_datetime(df["date_end"], errors="coerce", utc=True).dt.tz_localize(None)
     return df.sort_values("date_start", ascending=False).reset_index(drop=True)
 
 
