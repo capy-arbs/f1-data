@@ -168,16 +168,27 @@ def get_season_stats(driver_id: str) -> pd.DataFrame:
 
 
 def get_head_to_head(d1: str, d2: str) -> pd.DataFrame:
-    """Get races where both drivers competed, with their results side by side."""
+    """Get races where both drivers competed, with their results side by side.
+
+    ``d1_points`` / ``d2_points`` are championship totals per race —
+    main-race points UNION sprint points where applicable (LEFT JOIN with
+    sprint_results, coalescing to 0 for non-sprint weekends).
+    """
     with get_db() as conn:
         rows = conn.execute(
             """
             SELECT r.season, r.round, r.race_name,
-                   r1.position as d1_pos, r1.grid as d1_grid, r1.points as d1_points,
-                   r2.position as d2_pos, r2.grid as d2_grid, r2.points as d2_points
+                   r1.position as d1_pos, r1.grid as d1_grid,
+                   r1.points + COALESCE(sr1.points, 0) as d1_points,
+                   r2.position as d2_pos, r2.grid as d2_grid,
+                   r2.points + COALESCE(sr2.points, 0) as d2_points
             FROM results r1
             JOIN results r2 ON r1.race_id = r2.race_id
             JOIN races r ON r1.race_id = r.race_id
+            LEFT JOIN sprint_results sr1
+                   ON sr1.race_id = r1.race_id AND sr1.driver_id = r1.driver_id
+            LEFT JOIN sprint_results sr2
+                   ON sr2.race_id = r2.race_id AND sr2.driver_id = r2.driver_id
             WHERE r1.driver_id=? AND r2.driver_id=?
             ORDER BY r.season, r.round
             """,
@@ -187,18 +198,29 @@ def get_head_to_head(d1: str, d2: str) -> pd.DataFrame:
 
 
 def get_teammate_seasons(d1: str, d2: str) -> pd.DataFrame:
-    """Find seasons where two drivers were teammates (same constructor)."""
+    """Find seasons where two drivers were teammates (same constructor).
+
+    ``d1_points`` / ``d2_points`` UNION sprint points per race for the
+    same reason as ``get_head_to_head`` — the teammate-comparison table
+    in the UI sums these per season and must match the official totals.
+    """
     with get_db() as conn:
         rows = conn.execute(
             """
             SELECT r.season, r.round, r.race_name,
-                   r1.position as d1_pos, r1.grid as d1_grid, r1.points as d1_points,
-                   r2.position as d2_pos, r2.grid as d2_grid, r2.points as d2_points,
+                   r1.position as d1_pos, r1.grid as d1_grid,
+                   r1.points + COALESCE(sr1.points, 0) as d1_points,
+                   r2.position as d2_pos, r2.grid as d2_grid,
+                   r2.points + COALESCE(sr2.points, 0) as d2_points,
                    c.name as constructor
             FROM results r1
             JOIN results r2 ON r1.race_id = r2.race_id
             JOIN races r ON r1.race_id = r.race_id
             JOIN constructors c ON r1.constructor_id = c.constructor_id
+            LEFT JOIN sprint_results sr1
+                   ON sr1.race_id = r1.race_id AND sr1.driver_id = r1.driver_id
+            LEFT JOIN sprint_results sr2
+                   ON sr2.race_id = r2.race_id AND sr2.driver_id = r2.driver_id
             WHERE r1.driver_id=? AND r2.driver_id=?
               AND r1.constructor_id = r2.constructor_id
             ORDER BY r.season, r.round

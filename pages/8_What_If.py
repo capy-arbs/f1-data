@@ -33,17 +33,26 @@ st.markdown(
 # -- Shared helpers ---------------------------------------------------------
 
 def get_season_results(season: int) -> pd.DataFrame:
+    """Per-race results for a season. ``points`` is the championship total
+    per race — main-race points + sprint points (LEFT JOIN, coalesced to 0
+    for non-sprint weekends). Required so the Driver Swap and Alternative
+    Points System tabs match the official standings for 2021+ seasons.
+    """
     with get_db() as conn:
         rows = conn.execute(
             """
             SELECT r.round, r.race_name, res.driver_id,
                    d.given_name || ' ' || d.family_name as driver_name,
-                   d.code, res.position, res.points, res.grid,
+                   d.code, res.position,
+                   res.points + COALESCE(sr.points, 0) as points,
+                   res.grid,
                    c.name as constructor
             FROM results res
             JOIN races r ON res.race_id = r.race_id
             JOIN drivers d ON res.driver_id = d.driver_id
             JOIN constructors c ON res.constructor_id = c.constructor_id
+            LEFT JOIN sprint_results sr
+                   ON sr.race_id = res.race_id AND sr.driver_id = res.driver_id
             WHERE r.season = ?
             ORDER BY r.round, res.position
             """,

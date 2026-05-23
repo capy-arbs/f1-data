@@ -1,5 +1,6 @@
 """Orchestration: fetch from API, transform, insert into SQLite."""
 
+import sys
 import time
 from datetime import datetime
 
@@ -176,10 +177,13 @@ def load_qualifying(conn, year: int):
         return
     try:
         quals = fetch_qualifying(year)
-    except Exception:
-        # Qualifying data not available for older seasons
-        _log_fetch(conn, "qualifying", year, 0, 0)
-        conn.commit()
+    except Exception as e:
+        # Don't mark as fetched — a transient API/network failure used to
+        # silently hide qualifying data forever (past seasons have no TTL).
+        # Let the next refresh retry. Jolpica returns an empty list rather
+        # than raising when a season genuinely has no qualifying data, so
+        # an exception here is a real failure to surface.
+        print(f"WARN: load_qualifying({year}) failed: {e}", file=sys.stderr)
         return
     for q in quals:
         race_id = _get_race_id(conn, int(q["season"]), int(q["round"]))
@@ -217,9 +221,11 @@ def load_sprint_results(conn, year: int):
         return
     try:
         sprints = fetch_sprint_results(year)
-    except Exception:
-        _log_fetch(conn, "sprint_results", year, 0, 0)
-        conn.commit()
+    except Exception as e:
+        # Same reasoning as load_qualifying — don't permanently hide a
+        # season's sprint data behind a transient failure. The year<2021
+        # check above already handles the legitimate "no sprint data" case.
+        print(f"WARN: load_sprint_results({year}) failed: {e}", file=sys.stderr)
         return
     count = 0
     for s in sprints:
@@ -288,9 +294,11 @@ def load_pit_stops_for_race(conn, year: int, round_num: int):
         return
     try:
         stops = fetch_pit_stops(year, round_num)
-    except Exception:
-        _log_fetch(conn, "pitstops", year, round_num, 0)
-        conn.commit()
+    except Exception as e:
+        # Don't mark as fetched on real failures — pit stops pre-2011 just
+        # return empty (not exception), so an exception here means the API
+        # call itself failed and should retry next time.
+        print(f"WARN: load_pit_stops_for_race({year}/{round_num}) failed: {e}", file=sys.stderr)
         return
     for s in stops:
         for ps in s.get("PitStops", []) if isinstance(s, dict) and "PitStops" in s else [s]:
@@ -330,10 +338,16 @@ def load_driver_standings(conn, year: int):
     if total_rounds == 0:
         return
     count = 0
+    failed_rounds = 0
     for round_num in range(1, total_rounds + 1):
         try:
             standings_lists = fetch_driver_standings_for_round(year, round_num)
-        except Exception:
+        except Exception as e:
+            failed_rounds += 1
+            print(
+                f"WARN: load_driver_standings({year}/{round_num}) failed: {e}",
+                file=sys.stderr,
+            )
             continue
         for sl in standings_lists:
             for ds in sl.get("DriverStandings", []):
@@ -363,6 +377,16 @@ def load_driver_standings(conn, year: int):
                 count += 1
         conn.commit()
         time.sleep(API_RATE_LIMIT_DELAY)
+    if failed_rounds > 0:
+        # Some rounds failed — leave the season unmarked so the next refresh
+        # retries the whole set. Partial data is preserved by the per-round
+        # commits above; INSERT OR IGNORE handles dedup on the next run.
+        print(
+            f"INFO: {failed_rounds}/{total_rounds} rounds failed for "
+            f"driver_standings({year}); not marking as fetched",
+            file=sys.stderr,
+        )
+        return
     _log_fetch(conn, "driver_standings", year, 0, count)
     conn.commit()
 
@@ -375,10 +399,16 @@ def load_constructor_standings(conn, year: int):
     if total_rounds == 0:
         return
     count = 0
+    failed_rounds = 0
     for round_num in range(1, total_rounds + 1):
         try:
             standings_lists = fetch_constructor_standings_for_round(year, round_num)
-        except Exception:
+        except Exception as e:
+            failed_rounds += 1
+            print(
+                f"WARN: load_constructor_standings({year}/{round_num}) failed: {e}",
+                file=sys.stderr,
+            )
             continue
         for sl in standings_lists:
             for cs in sl.get("ConstructorStandings", []):
@@ -399,6 +429,13 @@ def load_constructor_standings(conn, year: int):
                 count += 1
         conn.commit()
         time.sleep(API_RATE_LIMIT_DELAY)
+    if failed_rounds > 0:
+        print(
+            f"INFO: {failed_rounds}/{total_rounds} rounds failed for "
+            f"constructor_standings({year}); not marking as fetched",
+            file=sys.stderr,
+        )
+        return
     _log_fetch(conn, "constructor_standings", year, 0, count)
     conn.commit()
 
