@@ -77,10 +77,6 @@ def render(drivers, title: str, caption: str) -> None:
 
     if teams:
         st.subheader("Teams")
-        team_chips = []
-        for t in teams:
-            color = TEAM_COLORS.get(t["constructor_id"], "#888")
-            team_chips.append(f":{color[1:]}[**{t['name']}**]" if len(color) == 7 else f"**{t['name']}**")
         st.markdown(" | ".join([t["name"] for t in teams]))
 
     st.subheader("Season-by-Season Results")

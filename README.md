@@ -14,17 +14,19 @@ A Formula 1 dashboard combining a complete historical archive (1950–today) wit
 
 The marquee feature. Pick a chaser and a target on track; the dashboard answers "how many laps until they catch up?"
 
-The math is intentionally transparent so the output stays interpretable:
+The solver walks forward lap by lap, accumulating per-lap pace advantage until it covers the current gap. With both drivers' degradation slopes at zero this collapses to the simple flat formula; with real degradation it accounts for both cars' lap times trending up over the next stint.
 
 ```
-laps_to_catch = ceil(gap_seconds / (target_pace - chaser_pace))
+Catches on smallest lap k such that
+  Σ_{i=1..k} (target_pace_i − chaser_pace_i) ≥ gap_seconds
+where pace_i for each driver = base_pace + deg_slope × i
 ```
 
 - **gap_seconds** — chaser's `gap_to_leader` minus target's, taken from the most recent OpenF1 intervals snapshot.
-- **pace** — mean lap time over the last 5 clean laps. Pit-out laps and any lap more than 5% slower than the driver's own median are dropped to reject yellow-flag noise.
-- **confidence** label (high / medium / low) layered on top, derived from the pace-delta magnitude, lap-time consistency, tire-age delta, and close proximity (sub-second gaps signal overtake range). Every verdict ships with a bulleted list of *why* — so you can tell when the model is confident vs. when it's about to be wrong.
+- **base_pace + deg_slope** — a linear fit on the driver's last 5 clean laps. Pit-out laps and any lap more than 5% slower than the driver's own median are dropped first to reject yellow-flag noise. With fewer than 3 clean laps the slope falls back to 0 and the formula above collapses to `ceil(gap / pace_delta)`.
+- **confidence** label (high / medium / low) layered on top, derived from the pace-delta magnitude, lap-time consistency, tire-age delta, degradation-slope gap, and close proximity (sub-second gaps signal overtake range). Every verdict ships with a bulleted list of *why* — so you can tell when the model is confident vs. when it's about to be wrong.
 
-If the chaser isn't actually faster, the widget says so plainly ("can't close on current pace") rather than producing a meaningless number.
+If the chaser isn't actually faster — or the cumulative advantage never covers the gap within an 80-lap projection window — the widget says so plainly ("can't close on current pace") rather than producing a meaningless number.
 
 A "closest battles" leaderboard runs the same calculation across every adjacent pair on the grid in one shot.
 
