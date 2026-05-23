@@ -79,7 +79,7 @@ The Home/Live Race page shows a "data may be stale" warning if the most-recent r
 - **SQLite** — local file `f1_data.db` (~544KB), shipped in the repo
 - **Pandas** — DataFrame work everywhere
 - **Requests** — HTTP for both data feeds
-- **streamlit-local-storage** — browser localStorage component for predictions
+- **NumPy** — explicit dependency for `queries/strike.py`'s linear-fit pace solver
 - **Jolpica API** — historical F1 data (Ergast successor; 1950–present)
 - **OpenF1 API** — live timing data (real-time gaps, intervals, sectors, stints, weather, race control). Free tier: 3 req/s, 30 req/min.
 - **bacinger/f1-circuits** (MIT) — GeoJSON track outlines for the Circuit Explorer
@@ -117,13 +117,9 @@ pages/
   4_Historical.py                      Era Comparison (renamed in nav)
   5_Circuit_Map.py                     Circuit Explorer
   6_Driver_Profiles.py                 Driver Profiles (current grid only)
-  7_GOAT_Calculator.py                 GOAT Calculator
   8_What_If.py                         What-If Simulator (3 tabs)
   9_Race_Calendar.py                   Race Calendar
-  10_Trivia.py                         Trivia
   11_Sprint_Analysis.py                Sprint Analysis
-  12_Safety_Stats.py                   DNF Analysis (renamed in nav)
-  13_Predictions.py                    Prediction Tracker (browser localStorage)
   14_Live_Race.py                      Live Race (default landing page)
   15_Pit_Stop_Records.py               Pit Stop Records
   16_Championship_Momentum.py          Championship Momentum
@@ -137,8 +133,8 @@ Sidebar groups (defined in app.py):
 - **This Season**: Standings, Race Calendar, Race Breakdown, Sprint Analysis, Championship Momentum
 - **Drivers**: Driver Profiles, Head-to-Head
 - **Circuits**: Circuit Map
-- **Play**: GOAT Calculator, What-If Simulator, Trivia, Prediction Tracker
-- **Records & History**: Historical Driver Profiles, Historical Head-to-Head, Era Comparison, Pit Stop Records, Lap Time Evolution, DNF Analysis
+- **Play**: What-If Simulator
+- **Records & History**: Historical Driver Profiles, Historical Head-to-Head, Era Comparison, Pit Stop Records, Lap Time Evolution
 - **Settings**: Load Data
 
 ## Files
@@ -146,7 +142,7 @@ Sidebar groups (defined in app.py):
 ```
 app.py                         Entry point — page config, theme CSS, custom nav, plotly modebar patch
 config.py                      API URLs, team colors (incl. Audi/Cadillac for 2026), point systems
-requirements.txt               Pinned to streamlit, plotly, requests, pandas, streamlit-local-storage
+requirements.txt               streamlit, plotly, requests, pandas, numpy
 f1_data.db                     SQLite (committed, ~544KB) — historical data 2015–present + 2026 ongoing
 
 .streamlit/config.toml         Pitwall theme palette (F1 red on near-black)
@@ -209,7 +205,6 @@ Both feeds are unaffiliated with Formula 1.
 - **`pd.merge_asof` chokes on NaN keys.** Drop NaN dates before any time-series merge (used in `gap_evolution_chart`).
 - **Streamlit's `st.navigation` doesn't natively collapse section groups.** That's why `app.py` uses `position="hidden"` for routing only and renders the sidebar manually with `st.expander`.
 - **`st.plotly_chart` is monkey-patched in `app.py`** so every chart gets `displayModeBar=True` + `displaylogo=False` without touching all 37 call sites.
-- **Predictions are stored in browser localStorage**, not on the server. The previous `predictions.json` on the server got wiped on every Streamlit Cloud container restart and was shared across all visitors with no isolation.
 - **Streamlit Cloud sleeps free-tier apps after ~7 days idle.** First visit after a long idle has a cold start.
 
 ## Theme
@@ -257,12 +252,12 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
 - [x] **Tire degradation in Time-to-Strike (2026-05-06)** — replaced the flat `ceil(gap / pace_delta)` with a lap-by-lap cumulative-advantage solver. New helpers in `queries/strike.py`: `_pace_and_deg` fits a line on the last 5 clean laps to recover (base_pace, deg_slope); `_laps_to_catch` walks forward, accumulating `(target_pace_k − chaser_pace_k)` until it covers the gap. With both slopes at 0 the math collapses to the old formula. Confidence layer factors in the deg-slope gap (`>= 0.05 s/lap²` widens the window, the inverse trims confidence) and adds an explanatory note. Live Race UI shows each driver's deg slope on the tire row. Returns `None` ("can't close") if the solver can't cover the gap within 80 projected laps — handles both the case where current pace is too thin AND the case where the chaser's own degradation will eat its advantage.
 - [x] **Stale-deploy reboot fix (2026-05-06)** — H2H page broke on the cloud with a redacted ImportError after the QA-pass commit. Code was correct locally and `origin/main` was in sync; cause was Streamlit Cloud cached a partial deploy where the new page imports loaded but the updated `queries/drivers.py` (with `get_latest_constructor`) didn't. Manual reboot from the dashboard fixed it. Documented the pattern in `CLAUDE.md` under "Stale-deploy ImportError pattern".
 - [x] **Driver Profiles + Head-to-Head dedupe (2026-05-07)** — the current/historical page pairs (`pages/6` ↔ `pages/18`, `pages/3` ↔ `pages/19`) were ~99% byte-identical, differing only in title/caption and `get_current_drivers` vs `get_all_drivers`. Extracted the shared bodies to a new `views/` layer (`views/driver_profile.py`, `views/head_to_head.py`) and reduced each of the four pages to a 13-line shim that calls `render(drivers, title, caption)`. Net: ~670 lines collapsed to ~351 with zero behaviour change. Stat additions or chart tweaks now touch one renderer instead of two pages, killing the drift risk that contributed to the 2026-05-06 ImportError.
+- [x] **2026-05-23 — architectural review pass** — deep code review surfaced three sprint-points UNION violations (`queries/drivers.py::get_head_to_head`, `queries/drivers.py::get_teammate_seasons`, `pages/8_What_If.py::get_season_results`), all fixed via LEFT JOIN on `sprint_results`. Also added explicit `numpy` to `requirements.txt` (was transitively pulled by pandas) and reworked loader failure handling: `load_qualifying` / `load_sprint_results` / `load_pit_stops_for_race` previously caught Exception then `_log_fetch(..., 0)` which marked the fetch complete forever — they now warn to stderr and let the next refresh retry. Round-level failures in `load_driver_standings` / `load_constructor_standings` now log + skip the final `_log_fetch` if any round failed. Added 21 strike-math unit tests in `tests/test_strike.py` covering `_laps_to_catch`, `_clean_laps`, `_pace_and_deg`, `_gap_between` + a `compute_strike` end-to-end smoke. **Scope cut:** removed GOAT Calculator, DNF Analysis, Trivia, Prediction Tracker (878 LOC) to focus on a polished current-season + historical-archive core; dropped `streamlit-local-storage` (Predictions was the only consumer). Page count: 18 → 14. Earlier Completed entries that mention removed files (Trivia subject exclusion, Pitwall theme cleanup citing `7_GOAT_Calculator.py` / `12_Safety_Stats.py`) describe past work and are kept as history.
 - [x] **Jolpica pagination cap fix + 2022–2025 backfill (2026-05-07)** — discovered while spot-checking Max's career stats in the refactored Driver Profiles page: every modern season had only 5–6 rounds of `results`/`qualifying`/`sprint_results` populated. Two compounding bugs in `data/fetcher.py::_get`: (1) we requested `limit=1000` per page, but Jolpica silently caps page size at 100, so each fetch returned only ~5 races' worth of result rows; (2) the loop incremented `offset += limit` (the requested 1000) instead of the served limit (100), so the `offset >= total` exit condition tripped after one page. Fix: clamp the requested limit to 100 and advance offset by the API-echoed `served_limit`. Also added a 429 retry loop with exponential backoff after Jolpica rate-limited the backfill mid-stream. Backfilled 2022–2025 by deleting the stale `fetch_log` rows and re-running `load_season()` for each year — `INSERT OR IGNORE` filled in the missing rounds without disturbing the rows already there. Result counts went from 5–6 rounds/season to full coverage (22/22, 22/22, 24/24, 24/24). DB grew from ~544KB → ~944KB. Note: the durable `_already_fetched()` fix (so past years re-check their round counts instead of trusting fetch_log forever) is still pending.
 
 ## In Progress / Next Steps
 - [ ] Unify pages still using "Season Tracker" / "Historical Comparison" / "Safety Stats" naming inside the page bodies (sidebar nav already renamed)
 - [ ] Standings → points accumulation chart still reads from `driver_standings.points` — needs verification that those numbers actually include sprints
-- [ ] What-If Driver Swap and Alternative Points System tabs only swap main-race results — sprint results stick with the original recipient. Either include sprints in the swap or document the asymmetry on-page.
 - [ ] Track outline rotation per circuit — F1.com diagrams are stylized rotations that don't match true North; would need a hand-curated rotation table per circuit.
 - [ ] Equal-area projection for track outlines — currently uses raw lng/lat, which Mercator-squashes high-latitude tracks (Silverstone, Spa, Zandvoort) horizontally by ~30-40%. Easy fix: multiply X by `cos(latitude)`.
 - [ ] **Live track map** — show driver positions on the track in real time, like F1's broadcast graphics. OpenF1's `/v1/location` endpoint gives X/Y/Z coordinates at ~3-4 Hz per driver. Phased approach:
@@ -282,7 +277,6 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
 
 ## Notes / Gotchas
 - `f1_data.db` IS committed (was originally gitignored — change made so the deploy ships with full historical data without needing a Load Data run on each container restart)
-- `predictions.json` IS gitignored — predictions are now per-browser via localStorage anyway
 - `__pycache__/`, `.venv/`, `venv/`, `.env` all gitignored
 - The `.devcontainer/` folder was auto-created by Streamlit Cloud — useful for one-click GitHub Codespaces editing
 - Streamlit Cloud serves apps via SPA — static HTML probes won't show theme changes; need a real browser to verify visual updates
