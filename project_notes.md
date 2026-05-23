@@ -81,7 +81,7 @@ The Home/Live Race page shows a "data may be stale" warning if the most-recent r
 - **Requests** — HTTP for both data feeds
 - **NumPy** — explicit dependency for `queries/strike.py`'s linear-fit pace solver
 - **Jolpica API** — historical F1 data (Ergast successor; 1950–present)
-- **OpenF1 API** — live timing data (real-time gaps, intervals, sectors, stints, weather, race control). Free tier: 3 req/s, 30 req/min.
+- **FastF1** — Python library that taps F1's own SignalR timing feed (same source the broadcast uses). Free, community-maintained. Swapped in 2026-05-23 after OpenF1 gated live-session data behind a paid tier.
 - **bacinger/f1-circuits** (MIT) — GeoJSON track outlines for the Circuit Explorer
 
 ## Architecture
@@ -89,7 +89,7 @@ The Home/Live Race page shows a "data may be stale" warning if the most-recent r
 Layered, one job each:
 
 ```
-data/      raw fetch + persistence (Jolpica REST + OpenF1 REST + GeoJSON)
+data/      raw fetch + persistence (Jolpica REST + FastF1 live + GeoJSON)
 queries/   pure SQL/compute helpers — no Streamlit, no I/O beyond the DB
 charts/    Plotly figure builders — take DataFrames in, return Figures out
 views/     shared page renderers used by more than one page (e.g. Driver Profiles and Historical Driver Profiles both call into views/driver_profile.py with different driver lists + titles)
@@ -98,7 +98,7 @@ pages/     Streamlit pages — thin shims: init the DB, fetch the input set, cal
 
 Two distinct data feeds:
 - `data/fetcher.py` + `data/loader.py` — pulls historical data from Jolpica into local SQLite. One-time on first launch, then refreshed by the auto-refresh action.
-- `data/live.py` — wraps OpenF1 endpoints with `@st.cache_data` per endpoint (TTLs 10–600s). Free-tier safe.
+- `data/live.py` — wraps FastF1's session model with `@st.cache_data` per endpoint (TTLs 10–600s). Shapes DataFrames to match the previous OpenF1 column contracts so downstream consumers (queries/strike.py, pages/14_Live_Race.py) didn't need changes.
 
 Time-to-Strike compute lives in `queries/strike.py` as a pure function returning a `StrikeResult` dataclass. The Live Race page renders the dataclass; nothing in the math layer knows about Streamlit. The solver is degradation-aware — it fits a line over recent clean laps to recover each driver's base pace + per-lap deg slope, then walks forward lap by lap until cumulative pace advantage covers the gap. Collapses to the old flat `ceil(gap/Δpace)` when slopes are 0.
 
@@ -156,7 +156,7 @@ data/
   fetcher.py                   Jolpica API calls with pagination
   loader.py                    Fetch -> transform -> insert orchestration; _parse_pit_duration handles M:SS.mmm
   normalizer.py                Cross-era point system recalculation
-  live.py                      OpenF1 live-timing wrapper (cached per endpoint)
+  live.py                      FastF1 live-timing wrapper (cached per endpoint)
   track_geojson.py             bacinger/f1-circuits track outline fetcher
 
 queries/
@@ -182,7 +182,7 @@ pages/                         18 Streamlit pages (see Pages section)
 
 ## Data Sources
 - **Jolpica** (`api.jolpi.ca/ergast/f1`) — historical F1 data, REST + JSON. Ergast API successor; same response shape. 1950–present, all rounds, qualifying, sprint, results, pit stops, standings.
-- **OpenF1** (`api.openf1.org/v1`) — live timing feed mirrored from official F1 broadcast data. Free, no auth. Rate limit: 3 req/s, 30 req/min. Endpoints used: `sessions`, `drivers`, `intervals`, `position`, `laps`, `stints`, `pit`, `weather`, `race_control`, `team_radio`.
+- **FastF1** (https://github.com/theOehrly/Fast-F1) — Python library tapping F1's own SignalR live timing feed. Free, no API key, community-maintained. Loaded via `fastf1.get_session(year, gp, identifier).load()`. Disk-cached locally under `$FASTF1_CACHE` (default `/tmp/fastf1_cache`).
 - **bacinger/f1-circuits** (GitHub) — MIT-licensed GeoJSON track outlines. Files named `{country_code}-{year}.geojson`. Mapped from our `circuit_id` via a hardcoded table in `data/track_geojson.py`, with a lat/lng nearest-neighbor fallback for unmapped IDs.
 
 Both feeds are unaffiliated with Formula 1.
@@ -201,7 +201,7 @@ Both feeds are unaffiliated with Formula 1.
 ## Critical gotchas
 - **Sprint points are in a separate table.** `results.points` is main-race only. Anywhere we sum points for a championship total, we have to UNION with `sprint_results.points` or join — otherwise totals don't match the official standings. Bug fixed twice (Championship Momentum, then Driver Profiles + Head-to-Head + GOAT + Era Comparison).
 - **Pit-stop durations come in two formats.** Normal stops are seconds (`"22.630"`); long incidents (red flags, repairs) come back as `"M:SS.mmm"` like `"18:01.553"`. `_parse_pit_duration()` in `data/loader.py` handles both. The pit-stop chart filters anything > 120s out and lists them in an annotation above the chart so they don't dwarf normal stops.
-- **`gap_to_leader` from OpenF1 can be a string for lapped cars.** `"+1 LAP"` shows up where you expect a float. `data/live.py::get_intervals` coerces via `pd.to_numeric(errors="coerce")` so lapped cars become NaN.
+- **Lapped cars don't have a comparable cumulative time at the leader's lap count.** `data/live.py::get_intervals` derives gap-to-leader from per-lap cumulative timestamps; a lapped driver ends up NaN. Time-to-Strike's `_gap_between` handles this with `pd.isna` checks.
 - **`pd.merge_asof` chokes on NaN keys.** Drop NaN dates before any time-series merge (used in `gap_evolution_chart`).
 - **Streamlit's `st.navigation` doesn't natively collapse section groups.** That's why `app.py` uses `position="hidden"` for routing only and renders the sidebar manually with `st.expander`.
 - **`st.plotly_chart` is monkey-patched in `app.py`** so every chart gets `displayModeBar=True` + `displaylogo=False` without touching all 37 call sites.
@@ -252,6 +252,7 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
 - [x] **Tire degradation in Time-to-Strike (2026-05-06)** — replaced the flat `ceil(gap / pace_delta)` with a lap-by-lap cumulative-advantage solver. New helpers in `queries/strike.py`: `_pace_and_deg` fits a line on the last 5 clean laps to recover (base_pace, deg_slope); `_laps_to_catch` walks forward, accumulating `(target_pace_k − chaser_pace_k)` until it covers the gap. With both slopes at 0 the math collapses to the old formula. Confidence layer factors in the deg-slope gap (`>= 0.05 s/lap²` widens the window, the inverse trims confidence) and adds an explanatory note. Live Race UI shows each driver's deg slope on the tire row. Returns `None` ("can't close") if the solver can't cover the gap within 80 projected laps — handles both the case where current pace is too thin AND the case where the chaser's own degradation will eat its advantage.
 - [x] **Stale-deploy reboot fix (2026-05-06)** — H2H page broke on the cloud with a redacted ImportError after the QA-pass commit. Code was correct locally and `origin/main` was in sync; cause was Streamlit Cloud cached a partial deploy where the new page imports loaded but the updated `queries/drivers.py` (with `get_latest_constructor`) didn't. Manual reboot from the dashboard fixed it. Documented the pattern in `CLAUDE.md` under "Stale-deploy ImportError pattern".
 - [x] **Driver Profiles + Head-to-Head dedupe (2026-05-07)** — the current/historical page pairs (`pages/6` ↔ `pages/18`, `pages/3` ↔ `pages/19`) were ~99% byte-identical, differing only in title/caption and `get_current_drivers` vs `get_all_drivers`. Extracted the shared bodies to a new `views/` layer (`views/driver_profile.py`, `views/head_to_head.py`) and reduced each of the four pages to a 13-line shim that calls `render(drivers, title, caption)`. Net: ~670 lines collapsed to ~351 with zero behaviour change. Stat additions or chart tweaks now touch one renderer instead of two pages, killing the drift risk that contributed to the 2026-05-06 ImportError.
+- [x] **2026-05-23 — swap OpenF1 → FastF1 for live data** — OpenF1 changed its policy to gate all live-session data (including past sessions during a live event) behind a paid Stripe checkout, breaking the dashboard's marquee feature mid-race weekend. Swapped to FastF1, which taps F1's own SignalR feed (the source the broadcast uses) — free, community-maintained, no auth. New `data/live.py` reshapes FastF1's session-object model into the OpenF1-compatible DataFrame contracts the rest of the codebase expected, so `pages/14_Live_Race.py`, `queries/strike.py`, and the chart builders needed zero changes. `session_key` is now a `"year|gp|identifier"` string (e.g. `"2026|Monaco|R"`) instead of an int. Live integration test against Miami 2026 race confirmed Time-to-Strike still produces the correct verdict (NOR can't close on ANT, gap=3.24s, pace_delta=-0.29s/lap).
 - [x] **2026-05-23 — architectural review pass** — deep code review surfaced three sprint-points UNION violations (`queries/drivers.py::get_head_to_head`, `queries/drivers.py::get_teammate_seasons`, `pages/8_What_If.py::get_season_results`), all fixed via LEFT JOIN on `sprint_results`. Also added explicit `numpy` to `requirements.txt` (was transitively pulled by pandas) and reworked loader failure handling: `load_qualifying` / `load_sprint_results` / `load_pit_stops_for_race` previously caught Exception then `_log_fetch(..., 0)` which marked the fetch complete forever — they now warn to stderr and let the next refresh retry. Round-level failures in `load_driver_standings` / `load_constructor_standings` now log + skip the final `_log_fetch` if any round failed. Added 21 strike-math unit tests in `tests/test_strike.py` covering `_laps_to_catch`, `_clean_laps`, `_pace_and_deg`, `_gap_between` + a `compute_strike` end-to-end smoke. **Scope cut:** removed GOAT Calculator, DNF Analysis, Trivia, Prediction Tracker (878 LOC) to focus on a polished current-season + historical-archive core; dropped `streamlit-local-storage` (Predictions was the only consumer). Page count: 18 → 14. Earlier Completed entries that mention removed files (Trivia subject exclusion, Pitwall theme cleanup citing `7_GOAT_Calculator.py` / `12_Safety_Stats.py`) describe past work and are kept as history.
 - [x] **Jolpica pagination cap fix + 2022–2025 backfill (2026-05-07)** — discovered while spot-checking Max's career stats in the refactored Driver Profiles page: every modern season had only 5–6 rounds of `results`/`qualifying`/`sprint_results` populated. Two compounding bugs in `data/fetcher.py::_get`: (1) we requested `limit=1000` per page, but Jolpica silently caps page size at 100, so each fetch returned only ~5 races' worth of result rows; (2) the loop incremented `offset += limit` (the requested 1000) instead of the served limit (100), so the `offset >= total` exit condition tripped after one page. Fix: clamp the requested limit to 100 and advance offset by the API-echoed `served_limit`. Also added a 429 retry loop with exponential backoff after Jolpica rate-limited the backfill mid-stream. Backfilled 2022–2025 by deleting the stale `fetch_log` rows and re-running `load_season()` for each year — `INSERT OR IGNORE` filled in the missing rounds without disturbing the rows already there. Result counts went from 5–6 rounds/season to full coverage (22/22, 22/22, 24/24, 24/24). DB grew from ~544KB → ~944KB. Note: the durable `_already_fetched()` fix (so past years re-check their round counts instead of trusting fetch_log forever) is still pending.
 
@@ -260,13 +261,13 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
 - [ ] Standings → points accumulation chart still reads from `driver_standings.points` — needs verification that those numbers actually include sprints
 - [ ] Track outline rotation per circuit — F1.com diagrams are stylized rotations that don't match true North; would need a hand-curated rotation table per circuit.
 - [ ] Equal-area projection for track outlines — currently uses raw lng/lat, which Mercator-squashes high-latitude tracks (Silverstone, Spa, Zandvoort) horizontally by ~30-40%. Easy fix: multiply X by `cos(latitude)`.
-- [ ] **Live track map** — show driver positions on the track in real time, like F1's broadcast graphics. OpenF1's `/v1/location` endpoint gives X/Y/Z coordinates at ~3-4 Hz per driver. Phased approach:
-  - Phase 1: snapshot map. Poll location every few seconds, plot dots per driver. Track outline derived from accumulated location points (the racing line traces it). ~80 LoC.
+- [ ] **Live track map** — show driver positions on the track in real time, like F1's broadcast graphics. FastF1's `session.pos_data` provides X/Y/Z coordinates per driver at ~3-4 Hz. Phased approach:
+  - Phase 1: snapshot map. Read pos_data after each refresh, plot dots per driver. Track outline derived from accumulated location points (the racing line traces it). ~80 LoC.
   - Phase 2: smooth animation between samples (Plotly animation frames or fast refresh loop).
-  - Phase 3: calibrated overlay on the bacinger track outline. Requires per-circuit transformation matrix to map OpenF1's local meters → bacinger's lat/lng. Could also be derived automatically by bounding-box alignment.
-- [ ] Start/finish marker on track outlines — bacinger GeoJSON doesn't encode where start/finish is, so we can't reliably mark it. Removed the misleading marker from coords[0] for now. To put it back accurately we'd need either: (a) hand-curated index per circuit, or (b) use OpenF1 location data to find the actual timing line.
+  - Phase 3: calibrated overlay on the bacinger track outline. Requires per-circuit transformation matrix to map FastF1's local meters → bacinger's lat/lng. Could also be derived automatically by bounding-box alignment.
+- [ ] Start/finish marker on track outlines — bacinger GeoJSON doesn't encode where start/finish is, so we can't reliably mark it. Removed the misleading marker from coords[0] for now. To put it back accurately we'd need either: (a) hand-curated index per circuit, or (b) use FastF1 position data to find the actual timing line.
 - [ ] More live-race widgets: pit-window predictor, undercut/overcut calculator. (Note: under 2026 regs DRS is gone — overtaking uses manual override mode + active aero. No technical "within 1 second" trigger anymore.)
-- [ ] Team radio playback — OpenF1's `/v1/team_radio` returns recording URLs; embed an `<audio>` player for the most recent few clips
+- [ ] Team radio playback — FastF1 doesn't expose team radio directly; would need to scrape F1's audio archive or wait for FastF1 to add it
 - [ ] Speed trap mini-leaderboard — top 5 by `i1_speed`/`st_speed` from the laps payload
 
 ## Known Issues / To Fix

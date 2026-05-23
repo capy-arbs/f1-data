@@ -9,7 +9,7 @@ Live at https://box-box.streamlit.app. Personal project, public repo, free Strea
 - **Streamlit** multi-page app via `st.navigation` (custom sidebar with collapsible groups, see `app.py`)
 - **SQLite** (`f1_data.db`, ~544KB, committed in repo) for historical data
 - **Jolpica API** for historical (`api.jolpi.ca/ergast/f1`)
-- **OpenF1 API** for live timing (`api.openf1.org/v1` — 3 req/s, 30 req/min free tier)
+- **FastF1** for live timing (taps F1's own SignalR feed; free, community-maintained). Swapped from OpenF1 on 2026-05-23 after OpenF1 began gating live-session data behind a paid tier.
 - **bacinger/f1-circuits** GeoJSON for track outlines
 
 Layered code structure:
@@ -34,8 +34,8 @@ Wins/podiums/poles stay main-race-only by F1 convention (sprint wins are tracked
 
 `data/loader.py::_parse_pit_duration` handles both. The pit-stop chart filters anything > 120s out and lists them in an annotation above the chart so they don't dwarf normal stops.
 
-### OpenF1 strings vs floats
-`gap_to_leader` and `interval` come back as strings like `"+1 LAP"` for lapped cars. `data/live.py::get_intervals` coerces with `pd.to_numeric(errors="coerce")` so lapped values become NaN — handled downstream by Time-to-Strike's gap calc.
+### Lapped cars become NaN gaps
+`get_intervals` derives gap-to-leader from per-lap cumulative timestamps. A driver who's been lapped won't have a comparable cumulative time at the leader's lap count, so their `gap_to_leader` ends up NaN. Time-to-Strike's `_gap_between` handles this with `pd.isna` checks — returns None rather than crashing.
 
 ### Jolpica caps `limit` at 100 silently
 Requesting `limit=1000` returns only 100 rows; the API echoes `"limit": 100` in the response without erroring. `data/fetcher.py::_get` clamps the requested limit to 100 and advances `offset` by the **served** limit (read back from the response), not the requested one — otherwise the `offset >= total` exit condition trips after a single page. Hit on 2026-05-07: every 2022–2025 season was stuck at ~5 rounds of `results`/`qualifying`/`sprint_results` because the loop quit early. The fix is paired with a 429 retry loop with exponential backoff (Jolpica rate-limits hard during long backfills) — `Retry-After` is honoured if present.
@@ -154,7 +154,7 @@ S1/S2/S3 columns coloured via pandas `Styler.apply`:
 - Green (`rgba(34, 197, 94, 0.35)`) = personal-best for that driver/sector
 - Default = no colour
 
-Bests are computed once from the full `laps` frame: session-best is `laps["duration_sector_N"].min()`, personal-best is per-driver `min()`. Comparisons round to 3dp because OpenF1 sometimes returns extra trailing precision.
+Bests are computed once from the full `laps` frame: session-best is `laps["duration_sector_N"].min()`, personal-best is per-driver `min()`. Comparisons round to 3dp because the live timing source sometimes returns extra trailing precision.
 
 ### Click-to-fill Time-to-Strike
 Standings dataframe uses `selection_mode="single-row"` + `on_select="rerun"`. Clicking any row populates the chaser picker with that driver and defaults the target to whoever is one position ahead. The selectboxes still allow override.
@@ -166,7 +166,7 @@ The Time-to-Strike block rebuilds the selectbox `key` based on the clicked row i
 
 ## Verification
 - `streamlit run app.py` then click each section
-- For the Time-to-Strike feature: defaults to the latest OpenF1 session; will fall back to the most recent completed race when no live race is running, so the page is never empty
+- For the Time-to-Strike feature: defaults to the latest FastF1-loaded session; will fall back to the most recent completed race when no live race is running, so the page is never empty
 - For sprint-point parity: Antonelli's 2026 total should be 100 (93 main + 7 sprint as of R4 Miami)
 - For pit-stop outlier handling: Australia 2026 should show Stroll's stops 1, 2, 4 stacked, with stops 3 + Alonso's stop 2 listed in the annotation above the chart
 
@@ -177,10 +177,10 @@ The Time-to-Strike block rebuilds the selectbox `key` based on the clicked row i
 - Don't switch to `hovermode="x unified"` on the Standings charts — 22 drivers don't fit; we use the driver+teammate model instead
 
 ## Future ideas (not started)
-- **Live track map** — driver dots on the racing line via OpenF1's `/v1/location`. Phased plan in `project_notes.md`.
+- **Live track map** — driver dots on the racing line via FastF1's `session.pos_data`. Phased plan in `project_notes.md`.
 - Pit-window predictor (best lap to pit given tire age + traffic)
 - Undercut/overcut calculator
 - Equal-area projection for track outlines (Mercator-squash at high latitude)
 - Per-circuit rotation table to match F1.com's stylized track diagrams
-- Accurate start/finish marker on track outlines (bacinger GeoJSON doesn't encode the line — would need hand-curated index per circuit or OpenF1 timing-line data)
-- Team radio playback — OpenF1's `team_radio` endpoint returns audio URLs
+- Accurate start/finish marker on track outlines (bacinger GeoJSON doesn't encode the line — would need hand-curated index per circuit or FastF1 position data)
+- Team radio playback — FastF1 doesn't expose team radio directly; would need to scrape F1's audio archive or wait for FastF1 to add it

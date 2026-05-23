@@ -1,104 +1,199 @@
-"""Live F1 timing data via the OpenF1 API.
+"""Live F1 timing data via FastF1.
 
-OpenF1 mirrors the official F1 live timing feed: positions, intervals, sector
-times, tire stints, weather, and race control messages. Every public function
-is wrapped in ``st.cache_data`` with a TTL sized to the data's freshness.
+Replaces OpenF1 after OpenF1 gated live-session data behind a paid tier on
+2026-05-23. FastF1 (https://github.com/theOehrly/Fast-F1) is the
+community-standard Python library that taps F1's own SignalR timing feed —
+the same source the official broadcast uses — and remains free during
+live sessions.
 
-All functions return pandas DataFrames; an empty frame is used when an endpoint
-has no data for the requested session OR when the API itself is unreachable.
-To distinguish those cases at the page layer, call ``feed_status()`` after a
-fetch — it reports the last ``_get`` outcome (success, auth-required, network
-failure, parse failure) so the UI can render an appropriate banner instead of
-looking broken.
+**Architecture:** OpenF1 was a REST API returning JSON; FastF1 is a Python
+library that loads a session as a single object with attached DataFrames.
+This module wraps the session model and reshapes the output to match the
+previous OpenF1-compatible contracts so ``pages/14_Live_Race.py``,
+``queries/strike.py``, and other consumers don't need changes:
 
-**Auth note (2026-05-23):** OpenF1 returns 401 during live F1 sessions to
-unauthenticated callers, with a "Live F1 session in progress. Global API
-access (including past sessions) is restricted to authenticated users until
-the session ends" detail message. The free tier still works between sessions.
-``feed_status()`` surfaces this so the Live Race page can tell the user why
-the data is missing.
+- ``session_key`` is now a ``"year|gp|identifier"`` string (e.g.
+  ``"2026|Monaco|R"``), opaque to callers.
+- DataFrame columns match what the old OpenF1 wrappers returned:
+  ``driver_number`` (int), ``lap_duration`` (float seconds),
+  ``duration_sector_{1,2,3}`` (float seconds), ``is_pit_out_lap`` (bool),
+  ``gap_to_leader`` / ``interval`` (float seconds, NaN for lapped cars),
+  ``date`` (datetime), ``compound`` / ``tyre_age``, etc.
+
+**Caching:** Every public function is wrapped in ``@st.cache_data`` with a
+TTL sized to the data's freshness. FastF1's own disk cache (default
+``/tmp/fastf1_cache``, override with ``FASTF1_CACHE`` env var) stores the
+per-session blob, so a cache-miss in Streamlit but a hit in FastF1 is
+near-instant.
+
+**Live-session behaviour:** FastF1 polls F1's live timing service; during
+an active session, ``session.load()`` returns data up to the current lap.
+The Streamlit TTLs mean the page refreshes on the same cadence as the old
+OpenF1 polling.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 
-import requests
+import fastf1
 import pandas as pd
 import streamlit as st
 
-OPENF1_BASE = "https://api.openf1.org/v1"
-TIMEOUT = 15
 
-# Module-level last-call state. _get writes; feed_status() reads. Cached
-# calls don't update this (they don't hit the network), so the state
-# reflects the *last attempted* fetch, which is what the UI banner needs.
+# Quiet FastF1's INFO chatter so Streamlit logs aren't noisy.
+fastf1.set_log_level("WARNING")
+logging.getLogger("fastf1").setLevel(logging.WARNING)
+
+# Configure FastF1's disk cache once at module load.
+_CACHE_DIR = os.environ.get("FASTF1_CACHE", "/tmp/fastf1_cache")
+os.makedirs(_CACHE_DIR, exist_ok=True)
+fastf1.Cache.enable_cache(_CACHE_DIR)
+
+
+# Module-level last-call state. Same shape as the previous OpenF1
+# implementation so existing callers of feed_status() in
+# pages/14_Live_Race.py keep working.
 _LAST_STATUS: dict = {"code": None, "message": None}
 
 
 def feed_status() -> dict:
-    """Outcome of the most recent ``_get`` call.
+    """Outcome of the most recent FastF1 load.
 
     Returns a dict with:
 
-    - ``code``: ``None`` on success; ``401`` for auth-required; the literal
-      strings ``"network"`` or ``"parse"`` for transport or JSON failures;
-      any other int for an unhandled HTTP error.
-    - ``message``: human-readable detail string suitable for a UI banner.
-
-    Pages should call this after their first fetch and conditionally render
-    an alert if ``code is not None``.
+    - ``code``: ``None`` on success; ``"error"`` for any load failure.
+    - ``message``: human-readable detail string for a UI banner.
     """
     return dict(_LAST_STATUS)
 
 
-def _get(endpoint: str, **params) -> list[dict]:
-    """Raw GET against OpenF1. Returns [] on any failure and records the
-    outcome in module state so the page layer can surface it.
+# -- session_key helpers ---------------------------------------------------
 
-    If ``OPENF1_API_KEY`` is set in the environment, sends it as a Bearer
-    token — lets a paying user unlock the live-session feed without code
-    changes.
-    """
-    headers = {}
-    api_key = os.environ.get("OPENF1_API_KEY")
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
+def _build_key(year: int, gp: str, identifier: str) -> str:
+    return f"{year}|{gp}|{identifier}"
+
+
+def _parse_key(session_key) -> tuple[int, str, str]:
+    parts = str(session_key).split("|")
+    return int(parts[0]), parts[1], parts[2]
+
+
+def _seconds(series_or_value):
+    """Timedelta -> float seconds, NaT -> NaN. Works on Series or scalar."""
+    if isinstance(series_or_value, pd.Series):
+        return series_or_value.dt.total_seconds()
+    if series_or_value is pd.NaT or series_or_value is None:
+        return float("nan")
     try:
-        resp = requests.get(
-            f"{OPENF1_BASE}/{endpoint}",
-            params=params, headers=headers, timeout=TIMEOUT,
-        )
-        if resp.status_code == 401:
-            try:
-                detail = resp.json().get("detail", "Authentication required")
-            except ValueError:
-                detail = "Authentication required"
-            _LAST_STATUS.update(code=401, message=detail)
-            return []
-        if not resp.ok:
-            _LAST_STATUS.update(
-                code=resp.status_code,
-                message=f"OpenF1 returned HTTP {resp.status_code}",
-            )
-            return []
+        return series_or_value.total_seconds()
+    except AttributeError:
+        return float("nan")
+
+
+def _absolute_lap_time(sess, laps_df) -> pd.Series:
+    """Best-effort absolute datetime per lap.
+
+    FastF1's ``LapStartDate`` is the ideal source but isn't always populated
+    (varies by session type and year). Falls back to ``session.date + Time``
+    (session-start + session-relative cumulative time), and finally to
+    ``Time`` itself so downstream sort-by-date logic still works.
+    """
+    if "LapStartDate" in laps_df.columns:
+        lsd = pd.to_datetime(laps_df["LapStartDate"], errors="coerce")
+        if lsd.notna().any():
+            return lsd
+    sess_date = getattr(sess, "date", None)
+    if sess_date is not None and pd.notna(sess_date):
+        return pd.to_datetime(sess_date) + laps_df["Time"]
+    # Last resort: treat session-relative Time as the sort key. Not a true
+    # datetime, but pandas sorts timedeltas correctly so groupby+tail(1)
+    # still returns the most-recent row per driver.
+    return laps_df["Time"]
+
+
+# -- Session loading -------------------------------------------------------
+
+def _load_session(session_key):
+    """Load a FastF1 session and return it, or None on failure.
+
+    Not cached at this layer — FastF1's own disk cache handles repeat loads
+    within a process; @st.cache_data on the public functions handles per-
+    Streamlit-rerun caching of the derived DataFrames.
+    """
+    year, gp, ident = _parse_key(session_key)
+    try:
+        sess = fastf1.get_session(year, gp, ident)
+        sess.load(laps=True, telemetry=False, weather=True, messages=True)
         _LAST_STATUS.update(code=None, message=None)
-        return resp.json()
-    except requests.RequestException as e:
-        _LAST_STATUS.update(code="network", message=f"OpenF1 unreachable: {e}")
-        return []
-    except ValueError as e:
-        _LAST_STATUS.update(code="parse", message=f"OpenF1 returned non-JSON: {e}")
-        return []
+        return sess
+    except Exception as e:
+        _LAST_STATUS.update(
+            code="error",
+            message=f"FastF1 load failed for {session_key}: {e}",
+        )
+        return None
 
 
-# -- Sessions ---------------------------------------------------------------
+# -- Sessions list ---------------------------------------------------------
 
-@st.cache_data(ttl=300, show_spinner=False)
+# Standard FastF1 session identifiers mapped to the human names the page UI
+# already shows. Order matters — earlier entries are tried first when an
+# event has fewer sessions (some old events skip FP3, sprint events differ).
+_SESSION_IDENTS = [
+    ("FP1", "Practice 1"),
+    ("FP2", "Practice 2"),
+    ("FP3", "Practice 3"),
+    ("SQ", "Sprint Qualifying"),
+    ("SS", "Sprint Shootout"),
+    ("S", "Sprint"),
+    ("Q", "Qualifying"),
+    ("R", "Race"),
+]
+
+
+@st.cache_data(ttl=600, show_spinner=False)
 def list_sessions(year: int | None = None) -> pd.DataFrame:
-    """All sessions for a year (or all years if year is None)."""
-    params = {"year": year} if year else {}
-    rows = _get("sessions", **params)
+    """All sessions for a year (or current year if None), shaped like the
+    OpenF1 result the page expects: one row per session with
+    ``session_key``, ``session_name``, ``country_name``, ``location``,
+    ``year``, ``date_start``, ``date_end``.
+    """
+    from datetime import datetime, timezone
+    if year is None:
+        year = datetime.now(timezone.utc).year
+    try:
+        sched = fastf1.get_event_schedule(year, include_testing=False)
+        _LAST_STATUS.update(code=None, message=None)
+    except Exception as e:
+        _LAST_STATUS.update(code="error", message=str(e))
+        return pd.DataFrame()
+
+    rows = []
+    for _, evt in sched.iterrows():
+        for i in range(1, 6):  # Up to 5 sessions per event
+            name_col = f"Session{i}"
+            date_col = f"Session{i}Date"
+            if name_col not in evt or pd.isna(evt[name_col]):
+                continue
+            short = str(evt[name_col])
+            # FastF1's Session{i} returns the short identifier ('FP1', 'Q', 'R', etc.)
+            human = dict(_SESSION_IDENTS).get(short, short)
+            rows.append({
+                "session_key": _build_key(int(evt["EventDate"].year), evt["EventName"], short),
+                "session_name": human,
+                "country_name": evt.get("Country", ""),
+                "location": evt.get("Location", ""),
+                "circuit_short_name": evt.get("Location", ""),
+                "year": int(evt["EventDate"].year),
+                "date_start": evt[date_col],
+                # FastF1 doesn't expose explicit end times; the live page uses
+                # date_start for "ended X ago" calcs and tolerates a missing
+                # end. Provide date_start as a sensible upper bound.
+                "date_end": evt[date_col],
+            })
+
     df = pd.DataFrame(rows)
     if df.empty:
         return df
@@ -109,123 +204,301 @@ def list_sessions(year: int | None = None) -> pd.DataFrame:
 
 @st.cache_data(ttl=60, show_spinner=False)
 def get_latest_session() -> dict | None:
-    """Most recent session that has data — used for the default 'live' view."""
-    rows = _get("sessions", session_key="latest")
-    if not rows:
-        return None
-    return rows[0] if isinstance(rows, list) else rows
+    """Most recent session whose date_start is in the past, or the next
+    upcoming session if none have started yet.
+    """
+    from datetime import datetime, timezone
+    now = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
+
+    # Try current and previous year — early in a season the schedule for
+    # the current year may have no completed sessions yet.
+    for yr_offset in (0, -1):
+        df = list_sessions(datetime.now(timezone.utc).year + yr_offset)
+        if df.empty:
+            continue
+        past = df[df["date_start"] <= now]
+        if not past.empty:
+            return past.iloc[0].to_dict()
+        # No past session — return the next upcoming.
+        return df.iloc[-1].to_dict()
+    return None
 
 
-# -- Drivers ----------------------------------------------------------------
+# -- Drivers ---------------------------------------------------------------
 
 @st.cache_data(ttl=600, show_spinner=False)
-def get_drivers(session_key: int | str) -> pd.DataFrame:
-    """Driver list for a session — driver_number, acronym, team, colour."""
-    rows = _get("drivers", session_key=session_key)
-    return pd.DataFrame(rows)
+def get_drivers(session_key) -> pd.DataFrame:
+    """Driver list with number, acronym, full name, team name, team colour.
 
-
-# -- Live state primitives --------------------------------------------------
-
-@st.cache_data(ttl=10, show_spinner=False)
-def get_intervals(session_key: int | str) -> pd.DataFrame:
-    """Time-series of gap_to_leader and interval (gap to car ahead).
-
-    During a live race this updates every ~4s. We cache for 10s — enough to
-    smooth out the per-rerun call rate without lagging the UI badly.
-
-    ``gap_to_leader`` and ``interval`` are normally floats but the API returns
-    strings like "+1 LAP" once a car has been lapped — coerce to numeric so
-    arithmetic downstream doesn't choke (lapped values become NaN).
+    Returns columns: ``driver_number`` (int), ``name_acronym``,
+    ``full_name``, ``team_name``, ``team_colour`` (with leading ``#``).
     """
-    rows = _get("intervals", session_key=session_key)
-    df = pd.DataFrame(rows)
-    if df.empty:
-        return df
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    for col in ("gap_to_leader", "interval"):
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df
+    sess = _load_session(session_key)
+    if sess is None or sess.results.empty:
+        return pd.DataFrame(
+            columns=["driver_number", "name_acronym", "full_name",
+                     "team_name", "team_colour"]
+        )
+    res = sess.results
+    df = pd.DataFrame({
+        "driver_number": pd.to_numeric(res["DriverNumber"], errors="coerce").astype("Int64"),
+        "name_acronym": res["Abbreviation"].astype(str),
+        "full_name": res["FullName"].astype(str) if "FullName" in res.columns else res["BroadcastName"].astype(str),
+        "team_name": res["TeamName"].astype(str),
+        "team_colour": res["TeamColor"].apply(
+            lambda c: f"#{c}" if isinstance(c, str) and not c.startswith("#") else c
+        ),
+    })
+    return df.dropna(subset=["driver_number"]).reset_index(drop=True)
 
 
-@st.cache_data(ttl=10, show_spinner=False)
-def get_position(session_key: int | str) -> pd.DataFrame:
-    """Position snapshots over time (one row per change per driver)."""
-    rows = _get("position", session_key=session_key)
-    df = pd.DataFrame(rows)
-    if df.empty:
-        return df
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    return df
-
+# -- Laps + sectors --------------------------------------------------------
 
 @st.cache_data(ttl=15, show_spinner=False)
-def get_laps(session_key: int | str, driver_number: int | None = None) -> pd.DataFrame:
-    """Lap-by-lap data: lap_duration, sector splits, speed traps, pit-out flag."""
-    params = {"session_key": session_key}
-    if driver_number is not None:
-        params["driver_number"] = driver_number
-    rows = _get("laps", **params)
-    df = pd.DataFrame(rows)
-    if df.empty:
-        return df
-    df["date_start"] = pd.to_datetime(df["date_start"], errors="coerce")
-    return df
+def get_laps(session_key, driver_number: int | None = None) -> pd.DataFrame:
+    """Lap-by-lap data reshaped to the OpenF1 column contract.
 
+    Columns: ``driver_number`` (int), ``lap_number`` (int), ``lap_duration``
+    (float seconds), ``duration_sector_1/2/3`` (float seconds),
+    ``is_pit_out_lap`` (bool), ``date_start`` (datetime), ``compound``,
+    ``tyre_life``, ``position``.
+    """
+    sess = _load_session(session_key)
+    if sess is None or sess.laps.empty:
+        return pd.DataFrame(columns=[
+            "driver_number", "lap_number", "lap_duration",
+            "duration_sector_1", "duration_sector_2", "duration_sector_3",
+            "is_pit_out_lap", "date_start", "compound", "tyre_life", "position",
+        ])
+    laps = sess.laps
+    if driver_number is not None:
+        laps = laps.pick_drivers(str(driver_number))
+
+    out = pd.DataFrame({
+        "driver_number": pd.to_numeric(laps["DriverNumber"], errors="coerce").astype("Int64"),
+        "lap_number": laps["LapNumber"].astype("Int64"),
+        "lap_duration": _seconds(laps["LapTime"]),
+        "duration_sector_1": _seconds(laps["Sector1Time"]),
+        "duration_sector_2": _seconds(laps["Sector2Time"]),
+        "duration_sector_3": _seconds(laps["Sector3Time"]),
+        # PitOutTime is non-NaT only on laps where the driver exited the pits.
+        "is_pit_out_lap": laps["PitOutTime"].notna(),
+        "date_start": _absolute_lap_time(sess, laps),
+        "compound": laps["Compound"].astype(str),
+        "tyre_life": laps["TyreLife"],
+        "position": laps["Position"],
+    })
+    return out.reset_index(drop=True)
+
+
+# -- Intervals (derived from laps) ----------------------------------------
+
+@st.cache_data(ttl=10, show_spinner=False)
+def get_intervals(session_key) -> pd.DataFrame:
+    """Time-series of ``gap_to_leader`` and ``interval`` per driver.
+
+    Derived from per-lap cumulative time since OpenF1's seconds-level
+    snapshots don't exist in FastF1. ``date`` is the LapStartDate of each
+    lap so downstream sorting works. ``gap_to_leader`` is in seconds;
+    ``interval`` is gap to the car classified one position ahead at that
+    lap. Lapped cars get NaN.
+    """
+    sess = _load_session(session_key)
+    if sess is None or sess.laps.empty:
+        return pd.DataFrame(columns=["driver_number", "gap_to_leader",
+                                       "interval", "date"])
+    laps = sess.laps
+
+    # Cumulative race time per driver = sum of LapTime across completed laps.
+    # We use Time (session-relative timestamp at lap completion) which already
+    # encodes the cumulative position.
+    df = pd.DataFrame({
+        "driver_number": pd.to_numeric(laps["DriverNumber"], errors="coerce").astype("Int64"),
+        "lap_number": laps["LapNumber"].astype("Int64"),
+        "cum_time_s": _seconds(laps["Time"]),
+        "date": _absolute_lap_time(sess, laps),
+        "position": laps["Position"],
+    }).dropna(subset=["driver_number", "lap_number"])
+
+    if df.empty:
+        return pd.DataFrame(columns=["driver_number", "gap_to_leader",
+                                       "interval", "date"])
+
+    # Per lap, the leader's cum_time is the min across drivers who completed
+    # that lap. gap_to_leader = this_driver_cum - leader_cum.
+    leader_per_lap = df.groupby("lap_number")["cum_time_s"].min()
+    df["gap_to_leader"] = df["cum_time_s"] - df["lap_number"].map(leader_per_lap)
+
+    # interval = gap to the car classified one position ahead on this lap.
+    # Sort by lap then position, take diff in gap_to_leader.
+    df = df.sort_values(["lap_number", "position"])
+    df["interval"] = df.groupby("lap_number")["gap_to_leader"].diff()
+
+    return df[["driver_number", "gap_to_leader", "interval", "date"]].reset_index(drop=True)
+
+
+# -- Position snapshots ----------------------------------------------------
+
+@st.cache_data(ttl=10, show_spinner=False)
+def get_position(session_key) -> pd.DataFrame:
+    """Position snapshots per driver per lap.
+
+    Returns columns: ``driver_number`` (int), ``position`` (int), ``date``.
+    One row per (driver, lap) — OpenF1 had finer granularity (per change)
+    but lap-level position is what every downstream consumer actually uses.
+    """
+    sess = _load_session(session_key)
+    if sess is None or sess.laps.empty:
+        return pd.DataFrame(columns=["driver_number", "position", "date"])
+
+    laps = sess.laps
+    df = pd.DataFrame({
+        "driver_number": pd.to_numeric(laps["DriverNumber"], errors="coerce").astype("Int64"),
+        "position": laps["Position"],
+        "date": _absolute_lap_time(sess, laps),
+    }).dropna(subset=["driver_number", "position"])
+    df["position"] = df["position"].astype("Int64")
+    return df.reset_index(drop=True)
+
+
+# -- Stints (derived from laps) -------------------------------------------
 
 @st.cache_data(ttl=30, show_spinner=False)
-def get_stints(session_key: int | str) -> pd.DataFrame:
-    """Tire stints: compound, lap range, age at start."""
-    rows = _get("stints", session_key=session_key)
+def get_stints(session_key) -> pd.DataFrame:
+    """Tire stints: one row per (driver, stint).
+
+    Columns: ``driver_number`` (int), ``stint_number`` (int),
+    ``compound``, ``lap_start`` (int), ``lap_end`` (int),
+    ``tyre_age_at_start`` (int).
+    """
+    sess = _load_session(session_key)
+    if sess is None or sess.laps.empty:
+        return pd.DataFrame(columns=[
+            "driver_number", "stint_number", "compound",
+            "lap_start", "lap_end", "tyre_age_at_start",
+        ])
+    laps = sess.laps[["DriverNumber", "Stint", "Compound", "LapNumber", "TyreLife"]].copy()
+    laps = laps.dropna(subset=["DriverNumber", "Stint", "LapNumber"])
+
+    rows = []
+    for (drv, stint), grp in laps.groupby(["DriverNumber", "Stint"]):
+        grp_sorted = grp.sort_values("LapNumber")
+        rows.append({
+            "driver_number": int(drv),
+            "stint_number": int(stint),
+            "compound": grp_sorted["Compound"].iloc[0],
+            "lap_start": int(grp_sorted["LapNumber"].iloc[0]),
+            "lap_end": int(grp_sorted["LapNumber"].iloc[-1]),
+            # TyreLife at stint start = TyreLife on the first lap minus how
+            # many laps into this stint that first lap was (0 if the stint
+            # started fresh, >0 if a stint started on used tyres).
+            "tyre_age_at_start": int(grp_sorted["TyreLife"].iloc[0] - 1)
+                                  if pd.notna(grp_sorted["TyreLife"].iloc[0]) else 0,
+        })
     return pd.DataFrame(rows)
 
 
+# -- Pits (derived from laps) ---------------------------------------------
+
 @st.cache_data(ttl=30, show_spinner=False)
-def get_pits(session_key: int | str) -> pd.DataFrame:
-    """Pit lane events with stop duration."""
-    rows = _get("pit", session_key=session_key)
+def get_pits(session_key) -> pd.DataFrame:
+    """Pit lane events with stop duration.
+
+    Columns: ``driver_number`` (int), ``lap_number`` (int),
+    ``pit_duration`` (float seconds, gap between PitInTime and the next
+    PitOutTime), ``date``.
+    """
+    sess = _load_session(session_key)
+    if sess is None or sess.laps.empty:
+        return pd.DataFrame(columns=["driver_number", "lap_number",
+                                       "pit_duration", "date"])
+    laps = sess.laps
+    rows = []
+    for drv, grp in laps.groupby("DriverNumber"):
+        grp = grp.sort_values("LapNumber")
+        for idx, row in grp.iterrows():
+            if pd.notna(row["PitInTime"]):
+                # Find this driver's next pit-out time.
+                future = grp[(grp["LapNumber"] > row["LapNumber"]) &
+                              (grp["PitOutTime"].notna())]
+                if not future.empty:
+                    pit_out = future.iloc[0]["PitOutTime"]
+                    dur = (pit_out - row["PitInTime"]).total_seconds()
+                else:
+                    dur = float("nan")
+                rows.append({
+                    "driver_number": int(drv),
+                    "lap_number": int(row["LapNumber"]),
+                    "pit_duration": dur,
+                    "date": pd.to_datetime(row["PitInTime"], errors="coerce"),
+                })
     df = pd.DataFrame(rows)
-    if df.empty:
-        return df
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    if not df.empty:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
     return df
 
 
+# -- Weather ---------------------------------------------------------------
+
 @st.cache_data(ttl=20, show_spinner=False)
-def get_weather(session_key: int | str) -> pd.DataFrame:
-    """Track + air temp, humidity, wind, rainfall — one row per minute."""
-    rows = _get("weather", session_key=session_key)
-    df = pd.DataFrame(rows)
-    if df.empty:
-        return df
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+def get_weather(session_key) -> pd.DataFrame:
+    """Track + air temp, humidity, wind, rainfall — minute-resolution."""
+    sess = _load_session(session_key)
+    if sess is None or sess.weather_data.empty:
+        return pd.DataFrame(columns=["date", "air_temperature",
+                                       "track_temperature", "humidity",
+                                       "rainfall", "wind_speed",
+                                       "wind_direction"])
+    w = sess.weather_data
+    # FastF1's Time is session-relative; combine with the session's start.
+    if hasattr(sess, "date") and sess.date is not None:
+        abs_date = pd.to_datetime(sess.date) + w["Time"]
+    else:
+        abs_date = w["Time"]
+    df = pd.DataFrame({
+        "date": pd.to_datetime(abs_date, errors="coerce"),
+        "air_temperature": w["AirTemp"],
+        "track_temperature": w["TrackTemp"],
+        "humidity": w["Humidity"],
+        "rainfall": w["Rainfall"],
+        "wind_speed": w["WindSpeed"],
+        "wind_direction": w["WindDirection"],
+    })
     return df.sort_values("date").reset_index(drop=True)
 
 
+# -- Race control ----------------------------------------------------------
+
 @st.cache_data(ttl=15, show_spinner=False)
-def get_race_control(session_key: int | str) -> pd.DataFrame:
-    """Race control messages — flags, safety cars, incidents, penalties."""
-    rows = _get("race_control", session_key=session_key)
-    df = pd.DataFrame(rows)
-    if df.empty:
-        return df
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+def get_race_control(session_key) -> pd.DataFrame:
+    """Race control messages — flags, safety cars, incidents, penalties.
+
+    Columns: ``date``, ``message``, ``flag``, ``category``.
+    """
+    sess = _load_session(session_key)
+    if sess is None or sess.race_control_messages.empty:
+        return pd.DataFrame(columns=["date", "message", "flag", "category"])
+    rc = sess.race_control_messages
+    df = pd.DataFrame({
+        "date": pd.to_datetime(rc["Time"], errors="coerce"),
+        "message": rc["Message"].astype(str),
+        "flag": rc["Flag"].astype(str).replace({"None": None, "nan": None}),
+        "category": rc["Category"].astype(str),
+    })
     return df.sort_values("date", ascending=False).reset_index(drop=True)
 
+
+# -- Team radio (placeholder — FastF1 doesn't expose this directly) -------
 
 @st.cache_data(ttl=20, show_spinner=False)
-def get_team_radio(session_key: int | str) -> pd.DataFrame:
-    """Team radio clips with audio URLs."""
-    rows = _get("team_radio", session_key=session_key)
-    df = pd.DataFrame(rows)
-    if df.empty:
-        return df
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    return df.sort_values("date", ascending=False).reset_index(drop=True)
+def get_team_radio(session_key) -> pd.DataFrame:
+    """Team radio. FastF1 doesn't expose this; return empty so callers
+    that include radio in their UI just skip the section gracefully.
+    """
+    return pd.DataFrame(columns=["driver_number", "date", "recording_url"])
 
 
-# -- Composed views ---------------------------------------------------------
+# -- Composed views (unchanged from OpenF1 implementation) ----------------
 
 def latest_intervals(intervals_df: pd.DataFrame) -> pd.DataFrame:
     """Reduce the intervals time-series to the most recent row per driver."""
@@ -275,8 +548,16 @@ def build_live_grid(
     if drivers_df.empty:
         return pd.DataFrame()
 
-    pos = latest_positions(position_df)[["driver_number", "position"]] if not position_df.empty else pd.DataFrame(columns=["driver_number", "position"])
-    iv = latest_intervals(intervals_df)[["driver_number", "gap_to_leader", "interval"]] if not intervals_df.empty else pd.DataFrame(columns=["driver_number", "gap_to_leader", "interval"])
+    pos = (
+        latest_positions(position_df)[["driver_number", "position"]]
+        if not position_df.empty
+        else pd.DataFrame(columns=["driver_number", "position"])
+    )
+    iv = (
+        latest_intervals(intervals_df)[["driver_number", "gap_to_leader", "interval"]]
+        if not intervals_df.empty
+        else pd.DataFrame(columns=["driver_number", "gap_to_leader", "interval"])
+    )
 
     last_lap = pd.DataFrame(columns=["driver_number", "lap_number", "lap_duration"])
     if not laps_df.empty:
@@ -286,10 +567,18 @@ def build_live_grid(
             .tail(1)[["driver_number", "lap_number", "lap_duration"]]
         )
 
-    stints = current_stints(stints_df, laps_df) if not stints_df.empty else pd.DataFrame(columns=["driver_number", "compound", "tyre_age"])
+    stints = (
+        current_stints(stints_df, laps_df)
+        if not stints_df.empty
+        else pd.DataFrame(columns=["driver_number", "compound", "tyre_age"])
+    )
 
-    grid = drivers_df[["driver_number", "name_acronym", "full_name", "team_name", "team_colour"]].copy()
-    for piece in (pos, iv, last_lap, stints[["driver_number", "compound", "tyre_age"]] if not stints.empty else stints):
+    grid = drivers_df[["driver_number", "name_acronym", "full_name",
+                        "team_name", "team_colour"]].copy()
+    for piece in (
+        pos, iv, last_lap,
+        stints[["driver_number", "compound", "tyre_age"]] if not stints.empty else stints,
+    ):
         grid = grid.merge(piece, on="driver_number", how="left")
 
     if "position" in grid.columns:

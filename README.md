@@ -6,7 +6,7 @@ A Formula 1 dashboard combining a complete historical archive (1950–today) wit
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![Streamlit](https://img.shields.io/badge/streamlit-1.30%2B-FF4B4B)
-![Data](https://img.shields.io/badge/data-Jolpica%20%2B%20OpenF1-success)
+![Data](https://img.shields.io/badge/data-Jolpica%20%2B%20FastF1-success)
 
 ---
 
@@ -22,7 +22,7 @@ Catches on smallest lap k such that
 where pace_i for each driver = base_pace + deg_slope × i
 ```
 
-- **gap_seconds** — chaser's `gap_to_leader` minus target's, taken from the most recent OpenF1 intervals snapshot.
+- **gap_seconds** — chaser's `gap_to_leader` minus target's, derived from each driver's most recent lap-completion timestamp (via FastF1's per-lap timing data).
 - **base_pace + deg_slope** — a linear fit on the driver's last 5 clean laps. Pit-out laps and any lap more than 5% slower than the driver's own median are dropped first to reject yellow-flag noise. With fewer than 3 clean laps the slope falls back to 0 and the formula above collapses to `ceil(gap / pace_delta)`.
 - **confidence** label (high / medium / low) layered on top, derived from the pace-delta magnitude, lap-time consistency, tire-age delta, degradation-slope gap, and close proximity (sub-second gaps signal overtake range). Every verdict ships with a bulleted list of *why* — so you can tell when the model is confident vs. when it's about to be wrong.
 
@@ -68,7 +68,7 @@ A "closest battles" leaderboard runs the same calculation across every adjacent 
 Three layers, each with one job:
 
 ```
-data/      raw fetch + persistence (Jolpica REST + OpenF1 REST + GeoJSON)
+data/      raw fetch + persistence (Jolpica REST + FastF1 live + GeoJSON)
 queries/   pure SQL/compute helpers — no Streamlit, no I/O beyond the DB
 charts/    Plotly figure builders — no I/O at all, take DataFrames in, return Figures out
 pages/     Streamlit views — orchestrate queries + charts, handle UI state
@@ -77,7 +77,7 @@ pages/     Streamlit views — orchestrate queries + charts, handle UI state
 Two distinct data feeds live in `data/`:
 
 - **`data/fetcher.py` + `data/loader.py`** — pulls historical data from the Jolpica API into local SQLite. Loaded on first launch; refreshed by the GitHub Action.
-- **`data/live.py`** — wraps OpenF1 endpoints for live timing. Each function is decorated with `@st.cache_data` and a TTL sized to how fast the underlying data changes (10 s for intervals, 30 s for stints, 600 s for the driver list, etc.). Free-tier rate limits are 3 req/s and 30 req/min — caching keeps a single user well under that ceiling.
+- **`data/live.py`** — wraps [FastF1](https://github.com/theOehrly/Fast-F1), which taps F1's own SignalR timing feed (same source the broadcast uses). Each public function is decorated with `@st.cache_data` and a TTL sized to how fast the underlying data changes (10 s for intervals, 30 s for stints, 600 s for the driver list, etc.). FastF1 has its own disk cache (`$FASTF1_CACHE`, default `/tmp/fastf1_cache`) so cache misses at the Streamlit layer hit FastF1's local cache, not the network. Switched from OpenF1 on 2026-05-23 after OpenF1 gated live-session data behind a paid tier.
 
 The Time-to-Strike compute helpers live in `queries/strike.py` as a pure function returning a `StrikeResult` dataclass with verdict text, confidence label, and a `notes[]` list of factors. The Live Race page renders that dataclass; nothing in the math layer knows about Streamlit.
 
@@ -86,7 +86,7 @@ Track outlines come from the [bacinger/f1-circuits](https://github.com/bacinger/
 ## Data sources
 
 - **[Jolpica API](https://api.jolpi.ca/ergast/f1)** — historical F1 data, 1950 to present. Ergast successor with the same response shape.
-- **[OpenF1 API](https://openf1.org)** — live timing feed mirrored from the official F1 broadcast data. Free, no auth.
+- **[FastF1](https://github.com/theOehrly/Fast-F1)** — Python library that pulls live timing from F1's own SignalR feed (the source the broadcast uses). Community-maintained, free.
 - **[bacinger/f1-circuits](https://github.com/bacinger/f1-circuits)** — MIT-licensed GeoJSON track outlines.
 
 All three projects are unaffiliated with Formula 1.
@@ -129,7 +129,7 @@ data/
   fetcher.py        Jolpica API calls with pagination
   loader.py         Fetch -> transform -> insert orchestration
   normalizer.py     Cross-era point system recalculation
-  live.py           OpenF1 live-timing wrapper (cached per endpoint)
+  live.py           FastF1 live-timing wrapper (cached per endpoint)
   track_geojson.py  bacinger/f1-circuits track outline fetcher
 
 queries/
