@@ -10,15 +10,18 @@ Three thought experiments stacked into tabs:
 
 from __future__ import annotations
 
-import math
-
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 
 from db.schema import init_db
-from db.connection import get_db
 from queries.standings import get_available_seasons, get_rounds_for_season
+from queries.what_if import (
+    get_season_results,
+    get_season_drivers,
+    calculate_standings,
+)
+from data.normalizer import get_point_system_for_year
 from config import PLOTLY_TEMPLATE, POINT_SYSTEMS
 
 init_db()
@@ -28,81 +31,6 @@ st.markdown(
     "Three tools for asking *what if?* about a season — give a driver someone else's "
     "year, replay under a different points system, or rewrite a single race result."
 )
-
-
-# -- Shared helpers ---------------------------------------------------------
-
-def get_season_results(season: int) -> pd.DataFrame:
-    """Per-race results for a season. ``points`` is the championship total
-    per race — main-race points + sprint points (LEFT JOIN, coalesced to 0
-    for non-sprint weekends). Required so the Driver Swap and Alternative
-    Points System tabs match the official standings for 2021+ seasons.
-    """
-    with get_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT r.round, r.race_name, res.driver_id,
-                   d.given_name || ' ' || d.family_name as driver_name,
-                   d.code, res.position,
-                   res.points + COALESCE(sr.points, 0) as points,
-                   res.grid,
-                   c.name as constructor
-            FROM results res
-            JOIN races r ON res.race_id = r.race_id
-            JOIN drivers d ON res.driver_id = d.driver_id
-            JOIN constructors c ON res.constructor_id = c.constructor_id
-            LEFT JOIN sprint_results sr
-                   ON sr.race_id = res.race_id AND sr.driver_id = res.driver_id
-            WHERE r.season = ?
-            ORDER BY r.round, res.position
-            """,
-            (season,),
-        ).fetchall()
-    return pd.DataFrame([dict(r) for r in rows])
-
-
-def get_season_drivers(season: int) -> list[dict]:
-    with get_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT d.driver_id, d.given_name || ' ' || d.family_name as name, d.code
-            FROM results res
-            JOIN drivers d ON res.driver_id = d.driver_id
-            JOIN races r ON res.race_id = r.race_id
-            WHERE r.season = ?
-            ORDER BY d.family_name
-            """,
-            (season,),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def calculate_standings(results: pd.DataFrame) -> pd.DataFrame:
-    standings = results.groupby(["driver_id", "driver_name", "code"]).agg(
-        total_points=("points", "sum"),
-        wins=("position", lambda x: (x == 1).sum()),
-        podiums=("position", lambda x: ((x >= 1) & (x <= 3)).sum()),
-        races=("position", "count"),
-    ).reset_index()
-    standings = standings.sort_values(
-        ["total_points", "wins"], ascending=[False, False]
-    ).reset_index(drop=True)
-    standings.index = standings.index + 1
-    standings.index.name = "Pos"
-    return standings
-
-
-def points_system_for(season: int) -> dict[int, int]:
-    """Pick the points table that applies to ``season``."""
-    if season >= 2010:
-        return POINT_SYSTEMS["2010-present"]
-    if season >= 2003:
-        return POINT_SYSTEMS["2003-2009"]
-    if season >= 1991:
-        return POINT_SYSTEMS["1991-2002"]
-    if season >= 1961:
-        return POINT_SYSTEMS["1961-1990"]
-    return POINT_SYSTEMS["1950-1960"]
 
 
 seasons = get_available_seasons()
@@ -372,7 +300,7 @@ with tab3:
     st.dataframe(ov_df, hide_index=True, use_container_width=True)
 
     # ---- Apply overrides with cascade insertion ------------------------
-    points_map = points_system_for(override_season)
+    points_map = get_point_system_for_year(override_season)
     modified = season_results.copy()
 
     def _recompute_points(df: pd.DataFrame) -> pd.DataFrame:

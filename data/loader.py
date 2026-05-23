@@ -306,7 +306,7 @@ def load_pit_stops_for_race(conn, year: int, round_num: int):
             dur_ms = _parse_pit_duration(dur)
             conn.execute(
                 "INSERT OR IGNORE INTO pit_stops "
-                "(race_id, driver_id, stop_number, lap, time_of_day, duration, duration_ms) "
+                "(race_id, driver_id, stop_number, lap, time_of_day, duration, duration_s) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     race_id,

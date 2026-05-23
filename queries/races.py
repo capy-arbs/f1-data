@@ -82,12 +82,12 @@ def get_pit_stops(season: int, round_num: int) -> pd.DataFrame:
 
         rows = conn.execute(
             """
-            SELECT ps.stop_number, ps.lap, ps.duration, ps.duration_ms,
+            SELECT ps.stop_number, ps.lap, ps.duration, ps.duration_s,
                    d.code, d.family_name
             FROM pit_stops ps
             JOIN drivers d ON ps.driver_id = d.driver_id
             WHERE ps.race_id=?
-            ORDER BY ps.duration_ms
+            ORDER BY ps.duration_s
             """,
             (race_id_row["race_id"],),
         ).fetchall()

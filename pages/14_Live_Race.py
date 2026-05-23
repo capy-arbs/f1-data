@@ -6,6 +6,7 @@ most recent session so the page is always populated.
 
 from __future__ import annotations
 
+import re
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -88,33 +89,20 @@ st.caption(
 )
 
 
-# Data freshness banner — surfaces if the historical DB is lagging behind
-# (auto-refresh runs Mon/Wed; manual refresh is in Settings -> Load Data).
+# Data freshness banner — fires when the DB is actually missing a race
+# whose date has passed, not just when F1's calendar has a long gap.
+# (Auto-refresh runs Mon/Wed; manual refresh is in Settings -> Load Data.)
 def _freshness_banner() -> None:
-    from datetime import date
-    from db.connection import get_db
-    with get_db() as conn:
-        latest = conn.execute(
-            """
-            SELECT ra.season, ra.round, ra.race_name, ra.date
-            FROM results res
-            JOIN races ra ON res.race_id = ra.race_id
-            ORDER BY ra.date DESC
-            LIMIT 1
-            """
-        ).fetchone()
-    if not latest:
+    from queries.standings import get_missing_completed_races
+    missing = get_missing_completed_races()
+    if not missing:
         return
-    try:
-        days_old = (date.today() - date.fromisoformat(latest["date"])).days
-    except (TypeError, ValueError):
-        return
-    if days_old > 14:
-        st.warning(
-            f"Historical data may be stale — latest race in DB: "
-            f"**{latest['race_name']}** ({days_old}d ago). "
-            "Auto-refresh runs Mon/Wed; trigger manually from Settings → Load Data."
-        )
+    names = ", ".join(m["race_name"] for m in missing[:3])
+    extra = f" + {len(missing) - 3} more" if len(missing) > 3 else ""
+    st.warning(
+        f"Historical data is missing recent race(s): **{names}**{extra}. "
+        "Auto-refresh runs Mon/Wed; trigger manually from Settings → Load Data."
+    )
 
 _freshness_banner()
 
@@ -131,7 +119,7 @@ with st.sidebar:
             st.error("Could not reach OpenF1. Check your connection.")
             st.stop()
     else:
-        year = st.selectbox("Season", list(range(datetime.utcnow().year, 2017, -1)), index=0)
+        year = st.selectbox("Season", list(range(datetime.now(timezone.utc).year, 2017, -1)), index=0)
         sessions_df = list_sessions(year)
         if sessions_df.empty:
             st.warning("No sessions found for that year.")
@@ -417,22 +405,15 @@ else:
         chaser_n = options[chaser_label]
         target_n = options[target_label]
 
-        # Total laps unknown for many sessions — try to read from race-control "LAP X/Y" if available, else None.
+        # Total laps unknown for many sessions — try to read from race-control
+        # "LAP X/Y" if available, else None.
         total_laps = None
         if not rc.empty and "message" in rc.columns:
             for msg in rc["message"].dropna().head(20):
-                m = str(msg).upper()
-                if "/" in m and "LAP" in m:
-                    parts = m.split()
-                    for p in parts:
-                        if "/" in p and p.replace("/", "").isdigit():
-                            try:
-                                total_laps = int(p.split("/")[1])
-                                break
-                            except ValueError:
-                                pass
-                    if total_laps:
-                        break
+                m = re.search(r"\bLAP\s+\d+/(\d+)\b", str(msg).upper())
+                if m:
+                    total_laps = int(m.group(1))
+                    break
 
         result = compute_strike(chaser_n, target_n, intervals, laps, stints, drivers, total_laps=total_laps)
 

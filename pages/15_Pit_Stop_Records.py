@@ -63,15 +63,15 @@ st.dataframe(
 # Distribution by team
 st.subheader("Average fastest stop by team")
 team_avg = (
-    df.groupby("constructor", as_index=False)["duration_ms"]
+    df.groupby("constructor", as_index=False)["duration_s"]
     .mean()
-    .sort_values("duration_ms")
+    .sort_values("duration_s")
 )
 fig = px.bar(
     team_avg,
-    x="constructor", y="duration_ms",
+    x="constructor", y="duration_s",
     template=PLOTLY_TEMPLATE,
-    labels={"constructor": "Team", "duration_ms": "Avg duration (s)"},
+    labels={"constructor": "Team", "duration_s": "Avg duration (s)"},
     title="Mean of the top stops shown above, per team",
 )
 st.plotly_chart(fig, use_container_width=True)

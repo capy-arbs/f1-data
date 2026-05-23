@@ -4,6 +4,50 @@ import pandas as pd
 from db.connection import get_db
 
 
+def get_latest_loaded_race() -> dict | None:
+    """Most recent race in the DB that has results loaded.
+
+    Returns ``{'season', 'round', 'race_name', 'date'}`` or None if the
+    results table is empty.
+    """
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT r.season, r.round, r.race_name, r.date
+            FROM results res
+            JOIN races r ON res.race_id = r.race_id
+            ORDER BY r.date DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def get_missing_completed_races() -> list[dict]:
+    """Races in the current season whose date has passed but whose results
+    haven't been loaded yet.
+
+    This is the right signal for the "data is stale" warning: it fires when
+    there's an actual missing race, not when F1's calendar happens to have
+    a long gap. Returns a list of ``{'season', 'round', 'race_name', 'date'}``
+    sorted most-recent first.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT r.season, r.round, r.race_name, r.date
+            FROM races r
+            LEFT JOIN results res ON res.race_id = r.race_id
+            WHERE r.date <= DATE('now')
+              AND r.season = (SELECT MAX(season) FROM races)
+              AND res.race_id IS NULL
+            GROUP BY r.race_id
+            ORDER BY r.date DESC
+            """
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def get_available_seasons() -> list[int]:
     with get_db() as conn:
         rows = conn.execute(

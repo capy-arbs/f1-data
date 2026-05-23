@@ -4,9 +4,14 @@ import streamlit as st
 import plotly.graph_objects as go
 
 from db.connection import get_db
-from queries.drivers import get_career_stats, get_season_stats, get_driver_seasons
+from queries.drivers import (
+    get_career_stats,
+    get_season_stats,
+    get_driver_seasons,
+    get_season_supplements,
+)
 from queries.standings import get_available_seasons
-from config import PLOTLY_TEMPLATE, TEAM_COLORS
+from config import PLOTLY_TEMPLATE
 
 
 def render(drivers, title: str, caption: str) -> None:
@@ -82,29 +87,15 @@ def render(drivers, title: str, caption: str) -> None:
     st.subheader("Season-by-Season Results")
     season_df = get_season_stats(driver_id)
     if not season_df.empty:
-        with get_db() as conn:
-            for idx, row in season_df.iterrows():
-                pos = conn.execute(
-                    """
-                    SELECT position FROM driver_standings
-                    WHERE driver_id=? AND season=?
-                      AND round = (SELECT MAX(round) FROM driver_standings WHERE season=?)
-                    """,
-                    (driver_id, int(row["season"]), int(row["season"])),
-                ).fetchone()
-                season_df.at[idx, "champ_pos"] = int(pos["position"]) if pos else None
-
-            for idx, row in season_df.iterrows():
-                team = conn.execute(
-                    """
-                    SELECT DISTINCT c.name FROM results res
-                    JOIN constructors c ON res.constructor_id = c.constructor_id
-                    JOIN races r ON res.race_id = r.race_id
-                    WHERE res.driver_id=? AND r.season=?
-                    """,
-                    (driver_id, int(row["season"])),
-                ).fetchone()
-                season_df.at[idx, "team"] = team["name"] if team else ""
+        # Single-query enrichment with champ position + team per season.
+        # Replaced an N+1 loop (2 queries/season) on 2026-05-23.
+        suppl = get_season_supplements(driver_id)
+        if not suppl.empty:
+            season_df = season_df.merge(suppl, on="season", how="left")
+            season_df["champ_pos"] = season_df["champ_pos"].astype("Int64")
+        else:
+            season_df["champ_pos"] = None
+            season_df["team"] = ""
 
         display = season_df.rename(columns={
             "season": "Year", "team": "Team", "races": "Races", "wins": "Wins",

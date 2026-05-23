@@ -197,6 +197,49 @@ def get_head_to_head(d1: str, d2: str) -> pd.DataFrame:
     return pd.DataFrame([dict(r) for r in rows])
 
 
+def get_season_supplements(driver_id: str) -> pd.DataFrame:
+    """Per-season championship position + team for a driver, in one query.
+
+    Replaces a previous N+1 loop in ``views/driver_profile.py`` that ran
+    two queries per season (Schumacher's profile fired ~40 queries). The
+    rewrite collapses both lookups into a single statement using a CTE
+    for the per-season final-round map.
+
+    Returns a DataFrame with ``season``, ``champ_pos``, ``team``.
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            WITH season_last_round AS (
+                SELECT season, MAX(round) AS final_round
+                FROM driver_standings
+                GROUP BY season
+            ),
+            driver_team_per_season AS (
+                -- DISTINCT picks one team per season; matches the original
+                -- code's `SELECT DISTINCT ... LIMIT 1` behaviour when a
+                -- driver changed teams mid-season.
+                SELECT DISTINCT r.season, c.name AS team
+                FROM results res
+                JOIN constructors c ON res.constructor_id = c.constructor_id
+                JOIN races r ON res.race_id = r.race_id
+                WHERE res.driver_id = ?
+            )
+            SELECT ds.season,
+                   ds.position AS champ_pos,
+                   COALESCE(t.team, '') AS team
+            FROM driver_standings ds
+            JOIN season_last_round slr
+              ON ds.season = slr.season AND ds.round = slr.final_round
+            LEFT JOIN driver_team_per_season t ON t.season = ds.season
+            WHERE ds.driver_id = ?
+            ORDER BY ds.season
+            """,
+            (driver_id, driver_id),
+        ).fetchall()
+    return pd.DataFrame([dict(r) for r in rows])
+
+
 def get_teammate_seasons(d1: str, d2: str) -> pd.DataFrame:
     """Find seasons where two drivers were teammates (same constructor).
 

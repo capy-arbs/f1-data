@@ -168,12 +168,12 @@ def get_records(record_type: str) -> pd.DataFrame:
 
 
 def get_fastest_pit_stops(season: int | None = None, limit: int = 50) -> pd.DataFrame:
-    """All-time (or per-season) fastest pit stops, ordered ascending by duration_ms.
+    """All-time (or per-season) fastest pit stops, ordered ascending by duration_s.
 
     Pit stop data only exists from 2011 onwards in the source feed; rows with a
-    null duration_ms (older races / DNF stops) are excluded.
+    null duration_s (older races / DNF stops) are excluded.
     """
-    where = "ps.duration_ms IS NOT NULL AND ps.duration_ms > 0"
+    where = "ps.duration_s IS NOT NULL AND ps.duration_s > 0"
     params: list = []
     if season is not None:
         where += " AND r.season = ?"
@@ -187,14 +187,14 @@ def get_fastest_pit_stops(season: int | None = None, limit: int = 50) -> pd.Data
                    d.given_name || ' ' || d.family_name AS driver,
                    d.code AS code,
                    c.name AS constructor,
-                   ps.lap, ps.duration, ps.duration_ms
+                   ps.lap, ps.duration, ps.duration_s
             FROM pit_stops ps
             JOIN races r ON ps.race_id = r.race_id
             JOIN drivers d ON ps.driver_id = d.driver_id
             JOIN results res ON res.race_id = ps.race_id AND res.driver_id = ps.driver_id
             JOIN constructors c ON res.constructor_id = c.constructor_id
             WHERE {where}
-            ORDER BY ps.duration_ms ASC
+            ORDER BY ps.duration_s ASC
             LIMIT ?
             """,
             params,

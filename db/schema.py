@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS pit_stops (
     lap INTEGER,
     time_of_day TEXT,
     duration TEXT,
-    duration_ms REAL,
+    duration_s REAL,
     UNIQUE(race_id, driver_id, stop_number)
 );
 

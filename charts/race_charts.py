@@ -146,8 +146,8 @@ def pit_stop_chart(df: pd.DataFrame) -> go.Figure:
 
     # Filter out abnormal "stops" (>120s = clearly an incident, not a tire change).
     OUTLIER_S = 120.0
-    excluded = df[df["duration_ms"] > OUTLIER_S]
-    df = df[(df["duration_ms"].notna()) & (df["duration_ms"] <= OUTLIER_S)]
+    excluded = df[df["duration_s"] > OUTLIER_S]
+    df = df[(df["duration_s"].notna()) & (df["duration_s"] <= OUTLIER_S)]
 
     # Stop-number palette — desaturated, cohesive, evenly-lit colours so no
     # single segment dominates the eye. Each stop gets a clearly different
@@ -161,7 +161,7 @@ def pit_stop_chart(df: pd.DataFrame) -> go.Figure:
         color = stop_colors[(stop_num - 1) % len(stop_colors)]
         fig.add_trace(go.Bar(
             x=stop_df["driver"],
-            y=stop_df["duration_ms"],
+            y=stop_df["duration_s"],
             name=f"Stop {stop_num}",
             marker_color=color,
             text=stop_df["duration"].apply(lambda d: f"{d}s" if pd.notna(d) else ""),
