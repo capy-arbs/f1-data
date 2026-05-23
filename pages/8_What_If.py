@@ -259,10 +259,13 @@ with tab3:
     orig_pos_str = "DNF" if pd.isna(orig_pos) else f"P{int(orig_pos)}"
 
     pos_options = ["DNF"] + [f"P{i}" for i in range(1, 21)]
+    # Look up the default via the value, not an offset — works regardless of
+    # how pos_options is constructed and won't silently break if the order
+    # ever changes (e.g. inserting "Disqualified" at the front).
     new_pos_label = cols[2].selectbox(
         f"New result (was {orig_pos_str})",
         pos_options,
-        index=0 if pd.isna(orig_pos) else int(orig_pos),
+        index=pos_options.index(orig_pos_str),
         key="ov_newpos",
     )
 

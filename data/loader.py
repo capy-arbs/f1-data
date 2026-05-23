@@ -78,8 +78,8 @@ def _upsert_circuit(conn, c: dict):
             c["circuitName"],
             loc.get("locality"),
             loc.get("country"),
-            float(loc.get("lat", 0)) or None,
-            float(loc.get("long", 0)) or None,
+            float(loc["lat"]) if loc.get("lat") not in (None, "") else None,
+            float(loc["long"]) if loc.get("long") not in (None, "") else None,
             c.get("url"),
         ),
     )
