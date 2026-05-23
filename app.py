@@ -32,7 +32,7 @@ st.markdown(
     section[data-testid="stSidebar"] > div:first-child { width: 240px !important; }
     section[data-testid="stSidebar"] [data-testid="stExpander"] {
         border: none;
-        margin-bottom: 4px;
+        margin-bottom: 0 !important;
     }
     section[data-testid="stSidebar"] [data-testid="stExpander"] details {
         border: none !important;
@@ -45,6 +45,11 @@ st.markdown(
         letter-spacing: 0.12em;
         color: #B0B2BD;
         font-weight: 600;
+        padding-top: 2px !important;
+        padding-bottom: 2px !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+        gap: 0.25rem !important;
     }
     section[data-testid="stSidebar"] a[data-testid="stPageLink"] {
         font-size: 14px !important;
