@@ -38,6 +38,7 @@ import logging
 import os
 
 import fastf1
+import fastf1.exceptions
 import pandas as pd
 import streamlit as st
 
@@ -132,6 +133,34 @@ def _load_session(session_key):
         _LAST_STATUS.update(
             code="error",
             message=f"FastF1 load failed for {session_key}: {e}",
+        )
+        return None
+
+
+def _safe_attr(sess, name: str):
+    """Access ``sess.<name>`` safely.
+
+    FastF1's ``session.load()`` can succeed without populating every data
+    category — common for sessions that ended less than an hour or two ago
+    (the live timing pipeline hasn't fully ingested yet). Accessing an
+    unloaded attribute raises ``DataNotLoadedError`` mid-render and crashes
+    the Live Race page.
+
+    Returns the attribute or ``None`` if it isn't loaded, and records a
+    user-friendly message via ``feed_status()`` so the page can banner it.
+    """
+    if sess is None:
+        return None
+    try:
+        return getattr(sess, name)
+    except fastf1.exceptions.DataNotLoadedError:
+        _LAST_STATUS.update(
+            code="not_loaded",
+            message=(
+                "FastF1 hasn't fully loaded this session yet — F1's timing "
+                "pipeline can take an hour or two to publish complete data "
+                "after a session ends. Try again shortly."
+            ),
         )
         return None
 
@@ -241,12 +270,12 @@ def get_drivers(session_key) -> pd.DataFrame:
     ``"#" + team_colour`` on it.
     """
     sess = _load_session(session_key)
-    if sess is None or sess.results.empty:
+    res = _safe_attr(sess, "results")
+    if res is None or res.empty:
         return pd.DataFrame(
             columns=["driver_number", "name_acronym", "full_name",
                      "team_name", "team_colour"]
         )
-    res = sess.results
     df = pd.DataFrame({
         "driver_number": pd.to_numeric(res["DriverNumber"], errors="coerce").astype("Int64"),
         "name_acronym": res["Abbreviation"].astype(str),
@@ -273,13 +302,13 @@ def get_laps(session_key, driver_number: int | None = None) -> pd.DataFrame:
     ``tyre_life``, ``position``.
     """
     sess = _load_session(session_key)
-    if sess is None or sess.laps.empty:
+    laps = _safe_attr(sess, "laps")
+    if laps is None or laps.empty:
         return pd.DataFrame(columns=[
             "driver_number", "lap_number", "lap_duration",
             "duration_sector_1", "duration_sector_2", "duration_sector_3",
             "is_pit_out_lap", "date_start", "compound", "tyre_life", "position",
         ])
-    laps = sess.laps
     if driver_number is not None:
         laps = laps.pick_drivers(str(driver_number))
 
@@ -313,10 +342,10 @@ def get_intervals(session_key) -> pd.DataFrame:
     lap. Lapped cars get NaN.
     """
     sess = _load_session(session_key)
-    if sess is None or sess.laps.empty:
+    laps = _safe_attr(sess, "laps")
+    if laps is None or laps.empty:
         return pd.DataFrame(columns=["driver_number", "gap_to_leader",
                                        "interval", "date"])
-    laps = sess.laps
 
     # Cumulative race time per driver = sum of LapTime across completed laps.
     # We use Time (session-relative timestamp at lap completion) which already
@@ -357,10 +386,10 @@ def get_position(session_key) -> pd.DataFrame:
     but lap-level position is what every downstream consumer actually uses.
     """
     sess = _load_session(session_key)
-    if sess is None or sess.laps.empty:
+    laps = _safe_attr(sess, "laps")
+    if laps is None or laps.empty:
         return pd.DataFrame(columns=["driver_number", "position", "date"])
 
-    laps = sess.laps
     df = pd.DataFrame({
         "driver_number": pd.to_numeric(laps["DriverNumber"], errors="coerce").astype("Int64"),
         "position": laps["Position"],
@@ -381,12 +410,13 @@ def get_stints(session_key) -> pd.DataFrame:
     ``tyre_age_at_start`` (int).
     """
     sess = _load_session(session_key)
-    if sess is None or sess.laps.empty:
+    all_laps = _safe_attr(sess, "laps")
+    if all_laps is None or all_laps.empty:
         return pd.DataFrame(columns=[
             "driver_number", "stint_number", "compound",
             "lap_start", "lap_end", "tyre_age_at_start",
         ])
-    laps = sess.laps[["DriverNumber", "Stint", "Compound", "LapNumber", "TyreLife"]].copy()
+    laps = all_laps[["DriverNumber", "Stint", "Compound", "LapNumber", "TyreLife"]].copy()
     laps = laps.dropna(subset=["DriverNumber", "Stint", "LapNumber"])
 
     rows = []
@@ -418,10 +448,10 @@ def get_pits(session_key) -> pd.DataFrame:
     PitOutTime), ``date``.
     """
     sess = _load_session(session_key)
-    if sess is None or sess.laps.empty:
+    laps = _safe_attr(sess, "laps")
+    if laps is None or laps.empty:
         return pd.DataFrame(columns=["driver_number", "lap_number",
                                        "pit_duration", "date"])
-    laps = sess.laps
     rows = []
     for drv, grp in laps.groupby("DriverNumber"):
         grp = grp.sort_values("LapNumber")
@@ -453,12 +483,12 @@ def get_pits(session_key) -> pd.DataFrame:
 def get_weather(session_key) -> pd.DataFrame:
     """Track + air temp, humidity, wind, rainfall — minute-resolution."""
     sess = _load_session(session_key)
-    if sess is None or sess.weather_data.empty:
+    w = _safe_attr(sess, "weather_data")
+    if w is None or w.empty:
         return pd.DataFrame(columns=["date", "air_temperature",
                                        "track_temperature", "humidity",
                                        "rainfall", "wind_speed",
                                        "wind_direction"])
-    w = sess.weather_data
     # FastF1's Time is session-relative; combine with the session's start.
     if hasattr(sess, "date") and sess.date is not None:
         abs_date = pd.to_datetime(sess.date) + w["Time"]
@@ -485,9 +515,9 @@ def get_race_control(session_key) -> pd.DataFrame:
     Columns: ``date``, ``message``, ``flag``, ``category``.
     """
     sess = _load_session(session_key)
-    if sess is None or sess.race_control_messages.empty:
+    rc = _safe_attr(sess, "race_control_messages")
+    if rc is None or rc.empty:
         return pd.DataFrame(columns=["date", "message", "flag", "category"])
-    rc = sess.race_control_messages
     df = pd.DataFrame({
         "date": pd.to_datetime(rc["Time"], errors="coerce"),
         "message": rc["Message"].astype(str),
