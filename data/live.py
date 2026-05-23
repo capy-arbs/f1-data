@@ -235,7 +235,10 @@ def get_drivers(session_key) -> pd.DataFrame:
     """Driver list with number, acronym, full name, team name, team colour.
 
     Returns columns: ``driver_number`` (int), ``name_acronym``,
-    ``full_name``, ``team_name``, ``team_colour`` (with leading ``#``).
+    ``full_name``, ``team_name``, ``team_colour`` (raw 6-char hex with
+    no leading ``#``). The no-``#`` shape matches the previous OpenF1
+    contract — ``charts/live_charts.py::pace_trace_chart`` does
+    ``"#" + team_colour`` on it.
     """
     sess = _load_session(session_key)
     if sess is None or sess.results.empty:
@@ -249,8 +252,10 @@ def get_drivers(session_key) -> pd.DataFrame:
         "name_acronym": res["Abbreviation"].astype(str),
         "full_name": res["FullName"].astype(str) if "FullName" in res.columns else res["BroadcastName"].astype(str),
         "team_name": res["TeamName"].astype(str),
+        # FastF1's TeamColor is raw hex ("00D7B6"). Strip any leading "#"
+        # defensively in case a future FastF1 version starts prefixing it.
         "team_colour": res["TeamColor"].apply(
-            lambda c: f"#{c}" if isinstance(c, str) and not c.startswith("#") else c
+            lambda c: str(c).lstrip("#") if isinstance(c, str) else "888888"
         ),
     })
     return df.dropna(subset=["driver_number"]).reset_index(drop=True)
