@@ -1,16 +1,27 @@
 """Live F1 timing data via the OpenF1 API.
 
 OpenF1 mirrors the official F1 live timing feed: positions, intervals, sector
-times, tire stints, weather, and race control messages. Free tier allows 3
-req/s and 30 req/min — every public function is wrapped in ``st.cache_data``
-with a TTL appropriate for how fast the underlying data changes.
+times, tire stints, weather, and race control messages. Every public function
+is wrapped in ``st.cache_data`` with a TTL sized to the data's freshness.
 
 All functions return pandas DataFrames; an empty frame is used when an endpoint
-has no data for the requested session (e.g. between sessions, or for archived
-sessions where a feed wasn't recorded).
+has no data for the requested session OR when the API itself is unreachable.
+To distinguish those cases at the page layer, call ``feed_status()`` after a
+fetch — it reports the last ``_get`` outcome (success, auth-required, network
+failure, parse failure) so the UI can render an appropriate banner instead of
+looking broken.
+
+**Auth note (2026-05-23):** OpenF1 returns 401 during live F1 sessions to
+unauthenticated callers, with a "Live F1 session in progress. Global API
+access (including past sessions) is restricted to authenticated users until
+the session ends" detail message. The free tier still works between sessions.
+``feed_status()`` surfaces this so the Live Race page can tell the user why
+the data is missing.
 """
 
 from __future__ import annotations
+
+import os
 
 import requests
 import pandas as pd
@@ -19,14 +30,65 @@ import streamlit as st
 OPENF1_BASE = "https://api.openf1.org/v1"
 TIMEOUT = 15
 
+# Module-level last-call state. _get writes; feed_status() reads. Cached
+# calls don't update this (they don't hit the network), so the state
+# reflects the *last attempted* fetch, which is what the UI banner needs.
+_LAST_STATUS: dict = {"code": None, "message": None}
+
+
+def feed_status() -> dict:
+    """Outcome of the most recent ``_get`` call.
+
+    Returns a dict with:
+
+    - ``code``: ``None`` on success; ``401`` for auth-required; the literal
+      strings ``"network"`` or ``"parse"`` for transport or JSON failures;
+      any other int for an unhandled HTTP error.
+    - ``message``: human-readable detail string suitable for a UI banner.
+
+    Pages should call this after their first fetch and conditionally render
+    an alert if ``code is not None``.
+    """
+    return dict(_LAST_STATUS)
+
 
 def _get(endpoint: str, **params) -> list[dict]:
-    """Raw GET against OpenF1. Returns [] on transport errors so the UI degrades gracefully."""
+    """Raw GET against OpenF1. Returns [] on any failure and records the
+    outcome in module state so the page layer can surface it.
+
+    If ``OPENF1_API_KEY`` is set in the environment, sends it as a Bearer
+    token — lets a paying user unlock the live-session feed without code
+    changes.
+    """
+    headers = {}
+    api_key = os.environ.get("OPENF1_API_KEY")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     try:
-        resp = requests.get(f"{OPENF1_BASE}/{endpoint}", params=params, timeout=TIMEOUT)
-        resp.raise_for_status()
+        resp = requests.get(
+            f"{OPENF1_BASE}/{endpoint}",
+            params=params, headers=headers, timeout=TIMEOUT,
+        )
+        if resp.status_code == 401:
+            try:
+                detail = resp.json().get("detail", "Authentication required")
+            except ValueError:
+                detail = "Authentication required"
+            _LAST_STATUS.update(code=401, message=detail)
+            return []
+        if not resp.ok:
+            _LAST_STATUS.update(
+                code=resp.status_code,
+                message=f"OpenF1 returned HTTP {resp.status_code}",
+            )
+            return []
+        _LAST_STATUS.update(code=None, message=None)
         return resp.json()
-    except (requests.RequestException, ValueError):
+    except requests.RequestException as e:
+        _LAST_STATUS.update(code="network", message=f"OpenF1 unreachable: {e}")
+        return []
+    except ValueError as e:
+        _LAST_STATUS.update(code="parse", message=f"OpenF1 returned non-JSON: {e}")
         return []
 
 

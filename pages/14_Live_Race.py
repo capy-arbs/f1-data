@@ -76,6 +76,7 @@ from data.live import (
     get_weather,
     get_race_control,
     build_live_grid,
+    feed_status,
 )
 from queries.strike import compute_strike, all_strike_pairs
 from charts.live_charts import stint_gantt, pace_trace_chart, gap_evolution_chart
@@ -185,6 +186,27 @@ laps = get_laps(session_key)
 stints = get_stints(session_key)
 weather = get_weather(session_key)
 rc = get_race_control(session_key)
+
+# Surface OpenF1 failures so the page doesn't just look broken when the
+# feed is gated (401 during live sessions for unauthenticated users since
+# 2026-05-23) or unreachable.
+_status = feed_status()
+if _status["code"] == 401:
+    st.warning(
+        "**OpenF1 live data is gated right now.** "
+        f"{_status['message']} "
+        "Set the `OPENF1_API_KEY` environment variable with a paid OpenF1 API key "
+        "(https://openf1.org) to unlock live-session data. Historical pages "
+        "(Standings, Race Breakdown, etc.) still work without it."
+    )
+elif _status["code"] == "network":
+    st.warning(
+        f"**Can't reach OpenF1 right now.** {_status['message']} "
+        "Try again in a few seconds — the auto-refresh will pick it up "
+        "as soon as the feed is back."
+    )
+elif _status["code"] not in (None,):
+    st.warning(f"**OpenF1 error.** {_status['message']}")
 
 current_lap = int(laps["lap_number"].max()) if not laps.empty else 0
 header_cols[1].metric("Current Lap", current_lap if current_lap else "—")
