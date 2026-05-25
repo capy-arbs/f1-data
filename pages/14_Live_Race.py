@@ -15,28 +15,35 @@ import pandas as pd
 import streamlit as st
 
 
+_SESSION_DURATIONS = {
+    "Race": timedelta(hours=3),
+    "Qualifying": timedelta(hours=1, minutes=30),
+    "Sprint Qualifying": timedelta(hours=1),
+    "Sprint Shootout": timedelta(hours=1),
+    "Sprint": timedelta(hours=1, minutes=30),
+    "Practice 1": timedelta(hours=1, minutes=30),
+    "Practice 2": timedelta(hours=1, minutes=30),
+    "Practice 3": timedelta(hours=1, minutes=30),
+}
+
+
 def _is_live(sess: dict) -> bool:
     """Whether ``sess`` is currently in progress.
 
-    Compares date_start / date_end against current UTC. Treat any error or
-    missing field as "not live" so the page degrades to its archived-session
-    UX rather than crashing.
+    FastF1's schedule doesn't expose session end times (date_end ==
+    date_start), so we estimate duration from the session type.
     """
     try:
         start = sess.get("date_start")
-        end = sess.get("date_end")
-        if not start or not end:
+        if not start:
             return False
         if isinstance(start, str):
             start = datetime.fromisoformat(start)
-        if isinstance(end, str):
-            end = datetime.fromisoformat(end)
         if start.tzinfo is None:
             start = start.replace(tzinfo=timezone.utc)
-        if end.tzinfo is None:
-            end = end.replace(tzinfo=timezone.utc)
+        duration = _SESSION_DURATIONS.get(sess.get("session_name", ""), timedelta(hours=3))
         now = datetime.now(timezone.utc)
-        return start <= now <= end
+        return start <= now <= start + duration
     except (TypeError, ValueError, AttributeError):
         return False
 
@@ -44,13 +51,15 @@ def _is_live(sess: dict) -> bool:
 def _time_since_end(sess: dict) -> str | None:
     """Human-friendly 'ended X ago' string for a finished session."""
     try:
-        end = sess.get("date_end")
-        if not end:
+        start = sess.get("date_start")
+        if not start:
             return None
-        if isinstance(end, str):
-            end = datetime.fromisoformat(end)
-        if end.tzinfo is None:
-            end = end.replace(tzinfo=timezone.utc)
+        if isinstance(start, str):
+            start = datetime.fromisoformat(start)
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=timezone.utc)
+        duration = _SESSION_DURATIONS.get(sess.get("session_name", ""), timedelta(hours=3))
+        end = start + duration
         delta: timedelta = datetime.now(timezone.utc) - end
         if delta.total_seconds() < 0:
             return None
