@@ -301,18 +301,18 @@ else:
             return "background-color: rgba(34, 197, 94, 0.35); color: #fff; font-weight: 600"
         return ""
 
+    all_style_cols = visible_cols + ["duration_sector_1", "duration_sector_2", "duration_sector_3",
+                                     "pb_s1", "pb_s2", "pb_s3"]
+
     def _row_styles(row) -> list[str]:
-        styles: dict[str, str] = {
+        sector_styles: dict[str, str] = {
             "S1": _sector_style(row.get("duration_sector_1"), session_best["s1"], row.get("pb_s1")),
             "S2": _sector_style(row.get("duration_sector_2"), session_best["s2"], row.get("pb_s2")),
             "S3": _sector_style(row.get("duration_sector_3"), session_best["s3"], row.get("pb_s3")),
         }
-        return [styles.get(col, "") for col in visible_cols]
+        return [sector_styles.get(col, "") for col in all_style_cols]
 
-    styled = show[visible_cols + ["duration_sector_1", "duration_sector_2", "duration_sector_3",
-                                  "pb_s1", "pb_s2", "pb_s3"]].style.apply(
-        _row_styles, axis=1, subset=visible_cols
-    )
+    styled = show[all_style_cols].style.apply(_row_styles, axis=1)
 
     # Render the styled table (display only — Styler backgrounds don't
     # render when selection_mode is active).
