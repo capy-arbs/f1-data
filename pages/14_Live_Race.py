@@ -1,7 +1,8 @@
 """Live Race — real-time timing, Time-to-Strike predictor, weather and race control.
 
-Pulls live data from OpenF1. When no race is in progress, defaults to the
-most recent session so the page is always populated.
+Pulls live data from F1's timing feed (direct SignalR REST endpoints during
+active sessions, FastF1 for completed sessions). When no race is in progress,
+defaults to the most recent session so the page is always populated.
 """
 
 from __future__ import annotations
@@ -17,9 +18,9 @@ import streamlit as st
 def _is_live(sess: dict) -> bool:
     """Whether ``sess`` is currently in progress.
 
-    OpenF1 returns ISO-8601 datetimes for date_start / date_end. We compare
-    against current UTC. Treat any error or missing field as "not live" so
-    the page degrades to its archived-session UX rather than crashing.
+    Compares date_start / date_end against current UTC. Treat any error or
+    missing field as "not live" so the page degrades to its archived-session
+    UX rather than crashing.
     """
     try:
         start = sess.get("date_start")
@@ -85,7 +86,7 @@ init_db()
 
 st.title("Live Race")
 st.caption(
-    "Real-time data from the F1 timing feed (via OpenF1). "
+    "Real-time data from the F1 timing feed. "
     "Falls back to the latest completed session when no race is running."
 )
 
@@ -117,7 +118,7 @@ with st.sidebar:
     if use_latest:
         sess = get_latest_session()
         if not sess:
-            st.error("Could not reach OpenF1. Check your connection.")
+            st.error("Could not reach F1 timing feed. Check your connection.")
             st.stop()
     else:
         year = st.selectbox("Season", list(range(datetime.now(timezone.utc).year, 2017, -1)), index=0)
@@ -196,6 +197,11 @@ if _status["code"] is not None:
         "Try again in a few seconds — historical pages "
         "(Standings, Race Breakdown, Driver Profiles) are unaffected."
     )
+_source = _status.get("source")
+if _source == "live":
+    st.caption("Data source: F1 Live Timing (real-time)")
+elif _source == "fastf1":
+    st.caption("Data source: FastF1 (cached session data — may be stale for recent sessions)")
 
 current_lap = int(laps["lap_number"].max()) if not laps.empty else 0
 header_cols[1].metric("Current Lap", current_lap if current_lap else "—")
@@ -281,7 +287,7 @@ else:
 
     # Sector-color styler: purple = session best, green = personal best,
     # default for everything else. Ties broken by rounding to 3dp since
-    # OpenF1 returns floats with extra trailing precision.
+    # The live feed returns floats with extra trailing precision.
     def _sector_style(val, sb, pb) -> str:
         if pd.isna(val):
             return ""

@@ -42,6 +42,8 @@ import fastf1.exceptions
 import pandas as pd
 import streamlit as st
 
+from data import f1_live_client as _live_client
+
 
 # Quiet FastF1's INFO chatter so Streamlit logs aren't noisy.
 fastf1.set_log_level("WARNING")
@@ -68,6 +70,54 @@ def feed_status() -> dict:
     - ``message``: human-readable detail string for a UI banner.
     """
     return dict(_LAST_STATUS)
+
+
+# -- Live-timing routing ---------------------------------------------------
+
+def _has_live_timing(session_key: str) -> bool:
+    """Whether F1's live timing static endpoints might have data.
+
+    Returns True for sessions in the current year that started within the
+    last 12 hours or are about to start within 30 minutes.
+    """
+    from datetime import datetime, timezone
+    try:
+        year, _, _ = _parse_key(session_key)
+    except (ValueError, IndexError):
+        return False
+    if year < datetime.now(timezone.utc).year:
+        return False
+    df = list_sessions(year)
+    if df.empty:
+        return False
+    match = df[df["session_key"] == session_key]
+    if match.empty:
+        return False
+    now = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
+    start = pd.Timestamp(match.iloc[0]["date_start"])
+    hours = (now - start).total_seconds() / 3600
+    return -0.5 <= hours <= 12
+
+
+def _try_live_client(fn_name: str, *args, **kwargs) -> pd.DataFrame | None:
+    """Try F1's direct live timing API; return ``None`` to fall back to FastF1."""
+    if not args or not _has_live_timing(args[0]):
+        return None
+    fn = getattr(_live_client, fn_name, None)
+    if fn is None:
+        return None
+    try:
+        result = fn(*args, **kwargs)
+        if not result.empty:
+            status = _live_client.feed_status()
+            status["source"] = "live"
+            _LAST_STATUS.update(**status)
+            return result
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "Live client %s failed: %s", fn_name, exc, exc_info=True,
+        )
+    return None
 
 
 # -- session_key helpers ---------------------------------------------------
@@ -127,7 +177,7 @@ def _load_session(session_key):
     try:
         sess = fastf1.get_session(year, gp, ident)
         sess.load(laps=True, telemetry=False, weather=True, messages=True)
-        _LAST_STATUS.update(code=None, message=None)
+        _LAST_STATUS.update(code=None, message=None, source="fastf1")
         return sess
     except Exception as e:
         _LAST_STATUS.update(
@@ -269,6 +319,9 @@ def get_drivers(session_key) -> pd.DataFrame:
     contract — ``charts/live_charts.py::pace_trace_chart`` does
     ``"#" + team_colour`` on it.
     """
+    live = _try_live_client("get_drivers", session_key)
+    if live is not None:
+        return live
     sess = _load_session(session_key)
     res = _safe_attr(sess, "results")
     if res is None or res.empty:
@@ -301,6 +354,9 @@ def get_laps(session_key, driver_number: int | None = None) -> pd.DataFrame:
     ``is_pit_out_lap`` (bool), ``date_start`` (datetime), ``compound``,
     ``tyre_life``, ``position``.
     """
+    live = _try_live_client("get_laps", session_key, driver_number)
+    if live is not None:
+        return live
     sess = _load_session(session_key)
     laps = _safe_attr(sess, "laps")
     if laps is None or laps.empty:
@@ -341,6 +397,9 @@ def get_intervals(session_key) -> pd.DataFrame:
     ``interval`` is gap to the car classified one position ahead at that
     lap. Lapped cars get NaN.
     """
+    live = _try_live_client("get_intervals", session_key)
+    if live is not None:
+        return live
     sess = _load_session(session_key)
     laps = _safe_attr(sess, "laps")
     if laps is None or laps.empty:
@@ -385,6 +444,9 @@ def get_position(session_key) -> pd.DataFrame:
     One row per (driver, lap) — OpenF1 had finer granularity (per change)
     but lap-level position is what every downstream consumer actually uses.
     """
+    live = _try_live_client("get_position", session_key)
+    if live is not None:
+        return live
     sess = _load_session(session_key)
     laps = _safe_attr(sess, "laps")
     if laps is None or laps.empty:
@@ -409,6 +471,9 @@ def get_stints(session_key) -> pd.DataFrame:
     ``compound``, ``lap_start`` (int), ``lap_end`` (int),
     ``tyre_age_at_start`` (int).
     """
+    live = _try_live_client("get_stints", session_key)
+    if live is not None:
+        return live
     sess = _load_session(session_key)
     all_laps = _safe_attr(sess, "laps")
     if all_laps is None or all_laps.empty:
@@ -447,6 +512,9 @@ def get_pits(session_key) -> pd.DataFrame:
     ``pit_duration`` (float seconds, gap between PitInTime and the next
     PitOutTime), ``date``.
     """
+    live = _try_live_client("get_pits", session_key)
+    if live is not None:
+        return live
     sess = _load_session(session_key)
     laps = _safe_attr(sess, "laps")
     if laps is None or laps.empty:
@@ -482,6 +550,9 @@ def get_pits(session_key) -> pd.DataFrame:
 @st.cache_data(ttl=20, show_spinner=False)
 def get_weather(session_key) -> pd.DataFrame:
     """Track + air temp, humidity, wind, rainfall — minute-resolution."""
+    live = _try_live_client("get_weather", session_key)
+    if live is not None:
+        return live
     sess = _load_session(session_key)
     w = _safe_attr(sess, "weather_data")
     if w is None or w.empty:
@@ -514,6 +585,9 @@ def get_race_control(session_key) -> pd.DataFrame:
 
     Columns: ``date``, ``message``, ``flag``, ``category``.
     """
+    live = _try_live_client("get_race_control", session_key)
+    if live is not None:
+        return live
     sess = _load_session(session_key)
     rc = _safe_attr(sess, "race_control_messages")
     if rc is None or rc.empty:

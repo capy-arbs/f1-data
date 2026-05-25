@@ -9,7 +9,7 @@ Live at https://box-box.streamlit.app. Personal project, public repo, free Strea
 - **Streamlit** multi-page app via `st.navigation` (custom sidebar with collapsible groups, see `app.py`)
 - **SQLite** (`f1_data.db`, ~544KB, committed in repo) for historical data
 - **Jolpica API** for historical (`api.jolpi.ca/ergast/f1`)
-- **FastF1** for live timing (taps F1's own SignalR feed; free, community-maintained). Swapped from OpenF1 on 2026-05-23 after OpenF1 began gating live-session data behind a paid tier.
+- **F1 Live Timing** (direct REST polling of `livetiming.formula1.com/static/`) for active sessions — `data/f1_live_client.py` fetches `.jsonStream` files, replays the delta updates, and returns DataFrames matching the `data/live.py` contract. **FastF1** is the fallback for completed sessions (post-session analysis from F1's own feed). Routing between them is automatic in `data/live.py` via `_has_live_timing()`. Previously used OpenF1 (swapped 2026-05-23, paid tier) then FastF1-only (swapped 2026-05-24 because `session.load()` returns nothing during live races).
 - **bacinger/f1-circuits** GeoJSON for track outlines
 
 Layered code structure:
@@ -67,6 +67,8 @@ Every function in `data/live.py` is wrapped in `@st.cache_data(ttl=...)` with a 
 - `race_control`: 15s
 - `drivers`: 600s (static per session)
 - `sessions`: 300s
+
+The live client (`data/f1_live_client.py`) adds a 5-second in-memory dedup cache (`_STREAM_CACHE`) so that multiple `data/live.py` functions calling the same endpoint within a single page render don't make redundant HTTP requests.
 
 Manual "Refresh now" button on Live Race calls `fn.clear()` on each cached fetcher to bypass TTLs.
 
