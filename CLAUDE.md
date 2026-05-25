@@ -35,7 +35,7 @@ Wins/podiums/poles stay main-race-only by F1 convention (sprint wins are tracked
 `data/loader.py::_parse_pit_duration` handles both. The pit-stop chart filters anything > 120s out and lists them in an annotation above the chart so they don't dwarf normal stops.
 
 ### Lapped cars become NaN gaps
-`get_intervals` derives gap-to-leader from per-lap cumulative timestamps. A driver who's been lapped won't have a comparable cumulative time at the leader's lap count, so their `gap_to_leader` ends up NaN. Time-to-Strike's `_gap_between` handles this with `pd.isna` checks — returns None rather than crashing.
+Gap data can be NaN for lapped/retired drivers. The FastF1 path derives gaps from cumulative timestamps (lapped drivers have no comparable time). The live client parses F1's gap strings directly — formats include `"+1.234"` (seconds), `""` (leader → 0.0), `"LAP 1"` / `"1L"` / `"1 L"` (all → NaN). Time-to-Strike's `_gap_between` handles NaN with `pd.isna` checks — returns None rather than crashing.
 
 ### Jolpica caps `limit` at 100 silently
 Requesting `limit=1000` returns only 100 rows; the API echoes `"limit": 100` in the response without erroring. `data/fetcher.py::_get` clamps the requested limit to 100 and advances `offset` by the **served** limit (read back from the response), not the requested one — otherwise the `offset >= total` exit condition trips after a single page. Hit on 2026-05-07: every 2022–2025 season was stuck at ~5 rounds of `results`/`qualifying`/`sprint_results` because the loop quit early. The fix is paired with a 429 retry loop with exponential backoff (Jolpica rate-limits hard during long backfills) — `Retry-After` is honoured if present.
@@ -71,6 +71,16 @@ Every function in `data/live.py` is wrapped in `@st.cache_data(ttl=...)` with a 
 The live client (`data/f1_live_client.py`) adds a 5-second in-memory dedup cache (`_STREAM_CACHE`) so that multiple `data/live.py` functions calling the same endpoint within a single page render don't make redundant HTTP requests.
 
 Manual "Refresh now" button on Live Race calls `fn.clear()` on each cached fetcher to bypass TTLs.
+
+### Live client stint data quirks
+F1's `TimingAppData.jsonStream` has two gotchas for tire/stint parsing (handled in `data/f1_live_client.py`):
+
+1. **Initial stint data arrives as a list, not a dict.** The very first `Stints` update per driver is `[{...}]` (list with one element), while all subsequent updates are `{"0": {...}}` (dict keyed by stint index). `_normalize_stints()` handles both.
+
+2. **`LapNumber` in stint data is the fastest-lap number, not the stint start.** Stint boundaries are instead computed from `TotalLaps` (cumulative tire wear including pre-race laps from `StartLaps`). Stint length = `TotalLaps − StartLaps`. The first stint starts at lap 1; each subsequent stint starts at the prior stint's end + 1. `_stint_boundaries()` centralises this logic and both `get_stints` and `get_laps` use it.
+
+### Tire strategy chart ordering
+`charts/live_charts.py::stint_gantt` sorts drivers by finishing position (from the grid's `position` column) so the winner appears at the top. Falls back to `lap_end` sort when position isn't available.
 
 ### Time-to-Strike formula
 Implemented in `queries/strike.py` as a pure function returning `StrikeResult`. The solver walks forward lap by lap, accumulating per-lap pace advantage until it covers the current gap:
@@ -143,12 +153,12 @@ The numeric prefixes on the files no longer affect routing or order — `app.py`
 ## Live Race page conventions
 
 ### Live session detection
-`pages/14_Live_Race.py::_is_live(sess)` checks whether the session is currently in progress (current UTC between `date_start` and `date_end`). Used to:
+FastF1's schedule doesn't expose session end times (`date_end == date_start`). `pages/14_Live_Race.py::_is_live(sess)` estimates duration from a `_SESSION_DURATIONS` dict (Race = 3h, Qualifying/Practice = 1.5h, Sprint = 1.5h) and checks `date_start <= now <= date_start + duration`. Used to:
 - Show a red "LIVE" badge in the header
 - Default the auto-refresh checkbox to ON
 - Pre-select the 10s refresh interval (vs 15s for archived sessions)
 
-`_time_since_end(sess)` formats human-readable "ended 2h ago" / "ended 3d ago" suffixes for finished-session headers.
+`_time_since_end(sess)` uses the same estimated end time for "ended 2h ago" / "ended 3d ago" suffixes.
 
 ### Sector colours on standings
 S1/S2/S3 columns coloured via pandas `Styler.apply`:
@@ -158,8 +168,8 @@ S1/S2/S3 columns coloured via pandas `Styler.apply`:
 
 Bests are computed once from the full `laps` frame: session-best is `laps["duration_sector_N"].min()`, personal-best is per-driver `min()`. Comparisons round to 3dp because the live timing source sometimes returns extra trailing precision.
 
-### Click-to-fill Time-to-Strike
-Standings dataframe uses `selection_mode="single-row"` + `on_select="rerun"`. Clicking any row populates the chaser picker with that driver and defaults the target to whoever is one position ahead. The selectboxes still allow override.
+### Standings table + click-to-fill
+The main standings table is rendered with pandas `Styler` (sector colours) **without** `selection_mode`, because Streamlit strips Styler backgrounds when selection is active. Click-to-fill for Time-to-Strike lives in a separate expander below the styled table, using a minimal `st.dataframe` with `selection_mode="single-row"` + `on_select="rerun"`. Clicking a row there populates the chaser picker and defaults the target to whoever is one position ahead. The selectboxes still allow override.
 
 The Time-to-Strike block rebuilds the selectbox `key` based on the clicked row index — this forces Streamlit to re-render with the new default rather than keeping the user's previous selection sticky.
 
@@ -169,7 +179,7 @@ The Time-to-Strike block rebuilds the selectbox `key` based on the clicked row i
 ## Verification
 - `streamlit run app.py` then click each section
 - For the Time-to-Strike feature: defaults to the latest FastF1-loaded session; will fall back to the most recent completed race when no live race is running, so the page is never empty
-- For sprint-point parity: Antonelli's 2026 total should be 100 (93 main + 7 sprint as of R4 Miami)
+- For sprint-point parity: Antonelli's 2026 total should be 100 (93 main + 7 sprint as of R4 Miami). DB has results through R4; R5 Canada will load at the next Mon/Wed auto-refresh.
 - For pit-stop outlier handling: Australia 2026 should show Stroll's stops 1, 2, 4 stacked, with stops 3 + Alonso's stop 2 listed in the annotation above the chart
 
 ## Don't
