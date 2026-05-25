@@ -245,6 +245,70 @@ def _safe_float(value) -> float:
         return float("nan")
 
 
+def _normalize_stints(raw) -> dict:
+    """Convert Stints payload to ``{stint_index_str: dict}`` regardless of
+    whether the feed sent a list or a dict."""
+    if isinstance(raw, list):
+        return {str(i): s for i, s in enumerate(raw) if isinstance(s, dict)}
+    if isinstance(raw, dict):
+        return raw
+    return {}
+
+
+def _collect_stint_state(timing_app_entries) -> dict[str, dict]:
+    """Replay TimingAppData to build cumulative stint state per driver."""
+    drv_stints: dict[str, dict] = {}
+    for _, data in timing_app_entries:
+        for drv, updates in (data.get("Lines") or {}).items():
+            stints = updates.get("Stints")
+            if stints is None:
+                continue
+            norm = _normalize_stints(stints)
+            if norm:
+                _deep_merge(drv_stints.setdefault(drv, {}), norm)
+    return drv_stints
+
+
+def _stint_boundaries(drv_stints: dict, cur_laps: dict[str, int]) -> dict[str, list[dict]]:
+    """Compute per-driver stint lap ranges from TotalLaps / StartLaps.
+
+    Returns ``{driver_num_str: [{"compound", "lap_start", "lap_end",
+    "start_laps", "stint"}, ...]}``.
+
+    The ``TotalLaps`` field in the feed is cumulative tire wear (including
+    pre-race laps from ``StartLaps``).  Stint length = TotalLaps − StartLaps.
+    """
+    result: dict[str, list[dict]] = {}
+    for drv, stints in drv_stints.items():
+        sorted_s = sorted(stints.items(), key=lambda x: int(x[0]))
+        boundaries: list[dict] = []
+        lap_cursor = 1
+        for idx, (snum, sd) in enumerate(sorted_s):
+            if not isinstance(sd, dict):
+                continue
+            start_laps = _safe_int(sd.get("StartLaps")) or 0
+            total_laps = _safe_int(sd.get("TotalLaps")) or 0
+            stint_len = max(0, total_laps - start_laps)
+
+            lap_start = lap_cursor
+            if idx + 1 < len(sorted_s) and stint_len > 0:
+                lap_end = lap_start + stint_len - 1
+            else:
+                computed = (lap_start + stint_len - 1) if stint_len > 0 else lap_start
+                lap_end = max(computed, cur_laps.get(drv, lap_start))
+
+            boundaries.append({
+                "stint": int(snum),
+                "compound": sd.get("Compound", "UNKNOWN"),
+                "lap_start": lap_start,
+                "lap_end": lap_end,
+                "start_laps": start_laps,
+            })
+            lap_cursor = lap_end + 1
+        result[drv] = boundaries
+    return result
+
+
 # -- Public data functions (matching data/live.py contracts) ---------------
 
 def get_drivers(session_key) -> pd.DataFrame:
@@ -287,25 +351,23 @@ def get_laps(session_key, driver_number: int | None = None) -> pd.DataFrame:
     _, session_start = _get_session_info(session_key)
     timing_app = _fetch_stream(session_key, "TimingAppData.jsonStream")
 
-    # Build cumulative stint state per driver from TimingAppData.
-    stint_state: dict[str, dict] = {}
-    for _, data in timing_app:
+    drv_stint_state = _collect_stint_state(timing_app)
+
+    # Get current lap per driver for boundary computation.
+    cur_laps: dict[str, int] = {}
+    for _, data in timing:
         for drv, updates in (data.get("Lines") or {}).items():
-            stints = updates.get("Stints")
-            if stints and isinstance(stints, dict):
-                _deep_merge(stint_state.setdefault(drv, {}), stints)
+            nl = _safe_int(updates.get("NumberOfLaps"))
+            if nl is not None:
+                cur_laps[drv] = nl
+
+    boundaries = _stint_boundaries(drv_stint_state, cur_laps)
 
     def _tire_at_lap(drv: str, lap: int) -> tuple[str | None, int | None]:
-        stints = stint_state.get(drv, {})
-        if not stints:
-            return None, None
-        for _, sd in sorted(stints.items(), key=lambda x: int(x[0]), reverse=True):
-            if not isinstance(sd, dict):
-                continue
-            start = _safe_int(sd.get("LapNumber")) or 0
-            if lap >= start:
-                age_base = _safe_int(sd.get("StartLaps")) or 0
-                return sd.get("Compound"), age_base + (lap - start) + 1
+        for b in boundaries.get(drv, []):
+            if b["lap_start"] <= lap <= b["lap_end"]:
+                tyre_life = b["start_laps"] + (lap - b["lap_start"]) + 1
+                return b["compound"], tyre_life
         return None, None
 
     drv_state: dict[str, dict] = {}
@@ -426,13 +488,7 @@ def get_stints(session_key) -> pd.DataFrame:
     if not timing_app:
         return empty
 
-    drv_stints: dict[str, dict] = {}
-    for _, data in timing_app:
-        for drv, updates in (data.get("Lines") or {}).items():
-            stints = updates.get("Stints")
-            if stints and isinstance(stints, dict):
-                _deep_merge(drv_stints.setdefault(drv, {}), stints)
-
+    drv_stints = _collect_stint_state(timing_app)
     if not drv_stints:
         return empty
 
@@ -444,26 +500,18 @@ def get_stints(session_key) -> pd.DataFrame:
             if nl is not None:
                 cur_laps[drv] = nl
 
+    bounds = _stint_boundaries(drv_stints, cur_laps)
+
     rows: list[dict] = []
-    for drv, stints in drv_stints.items():
-        sorted_s = sorted(stints.items(), key=lambda x: int(x[0]))
-        for idx, (snum, sd) in enumerate(sorted_s):
-            if not isinstance(sd, dict):
-                continue
-            lap_start = _safe_int(sd.get("LapNumber")) or 1
-            start_laps = _safe_int(sd.get("StartLaps")) or 0
-            if idx + 1 < len(sorted_s):
-                next_start = _safe_int(sorted_s[idx + 1][1].get("LapNumber")) or lap_start
-                lap_end = max(lap_start, next_start - 1)
-            else:
-                lap_end = cur_laps.get(drv, lap_start)
+    for drv, blist in bounds.items():
+        for b in blist:
             rows.append({
                 "driver_number": int(drv),
-                "stint_number": int(snum) + 1,
-                "compound": sd.get("Compound", "UNKNOWN"),
-                "lap_start": lap_start,
-                "lap_end": lap_end,
-                "tyre_age_at_start": start_laps,
+                "stint_number": b["stint"] + 1,
+                "compound": b["compound"],
+                "lap_start": b["lap_start"],
+                "lap_end": b["lap_end"],
+                "tyre_age_at_start": b["start_laps"],
             })
 
     return pd.DataFrame(rows) if rows else empty
