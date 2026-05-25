@@ -505,7 +505,7 @@ else:
 
 st.divider()
 st.subheader("Tire strategy")
-st.plotly_chart(stint_gantt(stints, drivers), use_container_width=True)
+st.plotly_chart(stint_gantt(stints, grid if not grid.empty else drivers), use_container_width=True)
 
 
 # -- Weather + race control feed ------------------------------------------

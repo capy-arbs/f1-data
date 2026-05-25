@@ -30,10 +30,19 @@ def stint_gantt(stints_df: pd.DataFrame, drivers_df: pd.DataFrame) -> go.Figure:
     df["length"] = (df["lap_end"].fillna(df["lap_start"]) - df["lap_start"] + 1).clip(lower=1)
     df["compound"] = df["compound"].fillna("UNKNOWN")
 
-    # Sort drivers by their last stint's lap_end descending — front of grid on top.
-    order = (
-        df.groupby("acronym")["lap_end"].max().sort_values(ascending=True).index.tolist()
-    )
+    # Sort drivers by finishing position (if available), falling back to
+    # lap_end for sessions where position isn't in the drivers frame.
+    if "position" in drivers_df.columns:
+        pos_map = drivers_df.dropna(subset=["position"]).set_index("driver_number")["position"]
+        df["_pos"] = df["driver_number"].map(pos_map).fillna(99)
+        order = (
+            df.groupby("acronym")["_pos"].min().sort_values(ascending=False).index.tolist()
+        )
+        df.drop(columns="_pos", inplace=True)
+    else:
+        order = (
+            df.groupby("acronym")["lap_end"].max().sort_values(ascending=True).index.tolist()
+        )
 
     fig = go.Figure()
     for compound, colour in COMPOUND_COLOURS.items():
