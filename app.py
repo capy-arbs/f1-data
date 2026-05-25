@@ -202,7 +202,11 @@ with st.sidebar:
     for group_label, pages in GROUPS:
         # Auto-expand the group containing the current page, so the user
         # always sees where they are without losing context.
-        contains_current = any(p.url_path == current.url_path for p in pages)
+        # Compare by title rather than url_path — Streamlit 1.57+ has a
+        # bug where url_path raises AttributeError on non-default pages
+        # (its own property accesses a private attr that no longer exists).
+        # Titles are unique across our GROUPS so this is equivalent.
+        contains_current = any(p.title == current.title for p in pages)
         with st.expander(group_label, expanded=contains_current):
             for page in pages:
                 st.page_link(page)
