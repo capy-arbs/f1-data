@@ -314,20 +314,27 @@ else:
         _row_styles, axis=1, subset=visible_cols
     )
 
-    # selection_mode + on_select="rerun" lets us read a row click and use it
-    # to populate the Time-to-Strike pickers below.
-    standings_event = st.dataframe(
+    # Render the styled table (display only — Styler backgrounds don't
+    # render when selection_mode is active).
+    st.dataframe(
         styled,
         column_order=visible_cols,
         hide_index=True,
         use_container_width=True,
-        on_select="rerun",
-        selection_mode="single-row",
-        key="standings_table",
     )
 
+    # Separate selectable table for click-to-fill on Time-to-Strike.
+    with st.expander("Click a row to prefill Time-to-Strike"):
+        standings_event = st.dataframe(
+            show[["Pos", "Driver", "Team"]],
+            hide_index=True,
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key="standings_table",
+        )
+
     st.caption(
-        "Click any row to set that driver as the **Chaser** in Time-to-Strike. "
         "Sectors: <span style='color:#8B5CF6;font-weight:700'>purple</span> = session best, "
         "<span style='color:#22c55e;font-weight:700'>green</span> = personal best.",
         unsafe_allow_html=True,
