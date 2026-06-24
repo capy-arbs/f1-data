@@ -63,3 +63,9 @@ TEAM_COLORS = {
 
 # Plotly defaults
 PLOTLY_TEMPLATE = "plotly_dark"
+
+# Semantic chart colours (gained / lost / unchanged) — used by delta charts so
+# the green/red meaning is defined once rather than hard-coded per call site.
+COLOR_POSITIVE = "#22c55e"
+COLOR_NEGATIVE = "#ef4444"
+COLOR_NEUTRAL = "#888888"

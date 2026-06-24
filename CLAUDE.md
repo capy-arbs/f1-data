@@ -19,6 +19,8 @@ Layered code structure:
 - `views/` — shared page renderers used by more than one page (e.g. the current-grid + historical Driver Profiles / Head-to-Head pairs both call into one renderer here). When you find yourself copying a whole page to make a "historical" or "alternate-filter" variant, put the body in `views/` and let each page be a thin shim.
 - `pages/` — Streamlit pages. Pages should stay thin: `init_db()`, fetch the input set (e.g. drivers list), call into a `views/` renderer with title/caption/data. Inline SQL or chart-building inside a page is a smell — push it down a layer.
 
+The What-If and Sprint Analysis pages are worked examples of this: the What-If simulation transforms (`apply_driver_swap`, `apply_points_system`, `apply_overrides` cascade insertion, `standings_rank_changes`) live in `queries/what_if.py` with charts in `charts/what_if_charts.py`; sprint queries + the sprint-vs-race compute live in `queries/sprint.py` with charts in `charts/sprint_charts.py`. The pages just wire inputs → transform → render. The pure transforms are unit-tested (`tests/test_what_if.py`, `tests/test_sprint.py`) without a DB.
+
 ## Key Patterns & Conventions
 
 ### Sprint points are in a separate table
@@ -103,6 +105,7 @@ Pitwall — broadcast-style dark. F1 red (#E10600) on near-black (#0A0B0F).
 - Custom CSS in `app.py` for typography, sidebar gradient, metric-card styling, table borders
 - Per-chart `hoverlabel` styling so tooltips match the theme
 - Compound colors (Pirelli) defined in `charts/live_charts.py::COMPOUND_COLOURS`
+- Semantic delta colours in `config.py`: `COLOR_POSITIVE` (green, gained), `COLOR_NEGATIVE` (red, lost), `COLOR_NEUTRAL`. Use these for gain/loss bars rather than re-hardcoding `#22c55e`/`#ef4444` (they're still hardcoded in a few older charts — migrate when touched)
 
 Page titles get an automatic red underline via the `h1` CSS rule. Section subheaders are uppercased small caps. Metric values render in monospace for that timing-board feel.
 
@@ -127,7 +130,7 @@ The sidebar labels and page titles don't always match the file names because we'
 
 | Sidebar / URL                | File                                  |
 |------------------------------|---------------------------------------|
-| Live Race (default)          | pages/14_Live_Race.py                 |
+| Live Session (default)       | pages/14_Live_Race.py                 |
 | Standings                    | pages/1_Season_Tracker.py             |
 | Race Calendar                | pages/9_Race_Calendar.py              |
 | Race Breakdown               | pages/2_Race_Breakdown.py             |
@@ -150,7 +153,12 @@ The numeric prefixes on the files no longer affect routing or order — `app.py`
 - **Drivers** group in the nav: filtered to the most-recent season's grid via `queries/drivers.py::get_current_drivers()`.
 - **Records & History** group: full archive via `get_all_drivers()`. Same rendering, different filter.
 
-## Live Race page conventions
+## Live Session page conventions
+
+The page (`pages/14_Live_Race.py`, sidebar label "Live Session") works for any session type — practice, qualifying, sprint, race — so there's live or recent data every day of a weekend. `_is_race_session(sess)` classifies Race/Sprint as the only sessions where **Time-to-Strike** is meaningful (its gap-closing model assumes on-track running order). For other sessions the widget stays usable for data inspection but renders an `st.info` note that the verdict isn't a real overtake prediction.
+
+### Standings position = classification, not last lap
+`get_position` is a per-lap time series, so the *last* row for a retired driver is frozen at the on-track position they held when they stopped — a car that drops out while running P2 stayed "P2" in the standings forever, duplicating whoever's really P2 (hit 2026-06-22: Antonelli showed P2 in the Spain GP despite a mid-race DNF). The fix is `get_classification(session_key)` — authoritative running order with retirements sorted to the back: FastF1's `session.results` (`Position` + `Status`) for completed sessions, the live feed's `Retired`/`Stopped` flags (re-ranked, since F1 leaves the retired car's last position in the feed) for live ones. `build_live_grid(..., classification_df)` prefers it for the `position` column, blanks `gap_to_leader`/`interval` for retired drivers, and the page shows their Gap as "DNF". Falls back to lap-derived `get_position` only when no classification exists yet (early in a live session before FastF1 ingests). `_is_finisher_status` treats `Finished`/`Lapped`/`+N Lap` as classified, everything else as retired.
 
 ### Live session detection
 FastF1's schedule doesn't expose session end times (`date_end == date_start`). `pages/14_Live_Race.py::_is_live(sess)` estimates duration from a `_SESSION_DURATIONS` dict (Race = 3h, Qualifying/Practice = 1.5h, Sprint = 1.5h) and checks `date_start <= now <= date_start + duration`. Used to:
@@ -175,6 +183,12 @@ The Time-to-Strike block rebuilds the selectbox `key` based on the clicked row i
 
 ### Position movement strip
 "Up: VER +3 (P12→P9)" / "Down: ALO -2 (P5→P7)" computed over the last 5 minutes of `position` events. Uses the data's own max timestamp as "now" rather than wall-clock time so the widget works on archived sessions too. Empty when nothing has changed in the window.
+
+## Development & CI
+- **Tests:** `pytest` (config in `pyproject.toml`, `testpaths = ["tests"]`). Suite covers the sprint-points invariant (incl. `what_if.get_season_results` and `historical.get_normalized_season_points`), the Time-to-Strike solver, the Jolpica fetcher pagination, and the live-client parsing (`_parse_gap`, `_normalize_stints`, `_stint_boundaries`, `get_classification` retired-driver reorder). The live client's pure helpers are tested by monkeypatching `_fetch_stream` — no network needed.
+- **Lint:** `ruff check .` (config in `pyproject.toml`). Rule set is `E,F,W,I,B,UP`; `E501` (line length) and `B905` (zip strict) are intentionally ignored. Imports are isort-ordered (stdlib / third-party / first-party). `ruff check --fix .` auto-fixes most issues.
+- **CI:** `.github/workflows/test.yml` runs ruff + pytest on every push/PR (Python 3.11). Streamlit Cloud auto-deploys `main`, so this gate is the only thing between a bad commit and prod — keep it green. Dev tooling is in `requirements-dev.txt` (not installed on Streamlit Cloud).
+- **Dependency pinning:** `requirements.txt` floors stay, with upper bounds capped at the next major (Cloud resolves fresh with no lockfile). Bump caps deliberately after testing a new major locally.
 
 ## Verification
 - `streamlit run app.py` then click each section

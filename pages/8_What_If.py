@@ -10,21 +10,34 @@ Three thought experiments stacked into tabs:
 
 from __future__ import annotations
 
-import streamlit as st
-import plotly.graph_objects as go
 import pandas as pd
+import streamlit as st
 
+from charts.what_if_charts import position_change_bar, standings_comparison_bar
+from config import POINT_SYSTEMS
+from data.normalizer import get_point_system_for_year
 from db.schema import init_db
 from queries.standings import get_available_seasons, get_rounds_for_season
 from queries.what_if import (
-    get_season_results,
-    get_season_drivers,
+    apply_driver_swap,
+    apply_overrides,
+    apply_points_system,
     calculate_standings,
+    get_season_drivers,
+    get_season_results,
+    standings_rank_changes,
 )
-from data.normalizer import get_point_system_for_year
-from config import PLOTLY_TEMPLATE, POINT_SYSTEMS
 
 init_db()
+
+
+def _standings_table(standings: pd.DataFrame, n: int = 15) -> pd.DataFrame:
+    """Top-``n`` slice of a standings frame with display-friendly column names."""
+    return (
+        standings[["driver_name", "total_points", "wins"]]
+        .rename(columns={"driver_name": "Driver", "total_points": "Points", "wins": "Wins"})
+        .head(n)
+    )
 
 st.title("What-If Simulator")
 st.markdown(
@@ -87,43 +100,17 @@ with tab1:
     original = calculate_standings(results)
 
     if replace_id != with_id:
-        modified_results = results.copy()
-        source_results = results[results["driver_id"] == with_id].copy()
-        for _, src in source_results.iterrows():
-            mask = (modified_results["driver_id"] == replace_id) & (modified_results["round"] == src["round"])
-            if mask.any():
-                modified_results.loc[mask, "position"] = src["position"]
-                modified_results.loc[mask, "points"] = src["points"]
-        modified = calculate_standings(modified_results)
+        modified = calculate_standings(apply_driver_swap(results, replace_id, with_id))
 
         col1, col2 = st.columns(2)
         col1.markdown("**Original**")
-        col1.dataframe(
-            original[["driver_name", "total_points", "wins"]].rename(
-                columns={"driver_name": "Driver", "total_points": "Points", "wins": "Wins"}
-            ).head(15),
-            use_container_width=True,
-        )
+        col1.dataframe(_standings_table(original), use_container_width=True)
         col2.markdown(f"**{replace_name} with {with_name}'s results**")
-        col2.dataframe(
-            modified[["driver_name", "total_points", "wins"]].rename(
-                columns={"driver_name": "Driver", "total_points": "Points", "wins": "Wins"}
-            ).head(15),
-            use_container_width=True,
-        )
+        col2.dataframe(_standings_table(modified), use_container_width=True)
 
-        # Visual delta
-        fig = go.Figure()
-        top_drivers = original.head(10)["driver_name"].tolist()
-        for driver in top_drivers:
-            orig_val = original[original["driver_name"] == driver]["total_points"].values
-            mod_val = modified[modified["driver_name"] == driver]["total_points"].values
-            o = orig_val[0] if len(orig_val) > 0 else 0
-            m = mod_val[0] if len(mod_val) > 0 else 0
-            color = "#22c55e" if m > o else "#ef4444" if m < o else "#888"
-            fig.add_trace(go.Bar(name=driver, x=["Original", "What-If"], y=[o, m], marker_color=color))
-        fig.update_layout(template=PLOTLY_TEMPLATE, barmode="group", height=450, yaxis_title="Points")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(
+            standings_comparison_bar(original, modified), use_container_width=True
+        )
     else:
         st.info("Pick two different drivers to see the what-if scenario.")
 
@@ -155,56 +142,21 @@ with tab2:
         st.warning("No results for this season.")
     else:
         original2 = calculate_standings(results2)
-
-        recalc = results2.copy()
-        recalc["points"] = recalc["position"].apply(
-            lambda p: float(points_map.get(int(p), 0)) if pd.notna(p) else 0.0
-        )
-        modified2 = calculate_standings(recalc)
+        modified2 = calculate_standings(apply_points_system(results2, points_map))
 
         col1, col2 = st.columns(2)
         col1.markdown("**Original**")
-        col1.dataframe(
-            original2[["driver_name", "total_points", "wins"]].rename(
-                columns={"driver_name": "Driver", "total_points": "Points", "wins": "Wins"}
-            ).head(15),
-            use_container_width=True,
-        )
+        col1.dataframe(_standings_table(original2), use_container_width=True)
         col2.markdown(f"**Under {target_system}**")
-        col2.dataframe(
-            modified2[["driver_name", "total_points", "wins"]].rename(
-                columns={"driver_name": "Driver", "total_points": "Points", "wins": "Wins"}
-            ).head(15),
-            use_container_width=True,
-        )
+        col2.dataframe(_standings_table(modified2), use_container_width=True)
 
         st.subheader("Position changes")
-        orig_rank = {row["driver_name"]: i + 1 for i, (_, row) in enumerate(original2.iterrows())}
-        mod_rank = {row["driver_name"]: i + 1 for i, (_, row) in enumerate(modified2.iterrows())}
-        changes = []
-        for driver, op in orig_rank.items():
-            mp = mod_rank.get(driver, op)
-            diff = op - mp
-            if diff != 0:
-                changes.append({"Driver": driver, "Original": op, "New": mp, "Change": diff})
-
-        if changes:
-            change_df = pd.DataFrame(changes).sort_values("Change", ascending=False)
-            fig = go.Figure(go.Bar(
-                x=change_df["Change"],
-                y=change_df["Driver"],
-                orientation="h",
-                marker_color=["#22c55e" if c > 0 else "#ef4444" for c in change_df["Change"]],
-                text=change_df["Change"].apply(lambda x: f"+{x}" if x > 0 else str(x)),
-                textposition="auto",
-            ))
-            fig.update_layout(
-                template=PLOTLY_TEMPLATE,
-                yaxis=dict(autorange="reversed"),
-                xaxis_title="Position change (positive = moved up)",
-                height=500,
+        change_df = standings_rank_changes(original2, modified2)
+        if not change_df.empty:
+            st.plotly_chart(
+                position_change_bar(change_df, "Position change (positive = moved up)"),
+                use_container_width=True,
             )
-            st.plotly_chart(fig, use_container_width=True)
         else:
             st.success("No position changes under this system.")
 
@@ -304,48 +256,7 @@ with tab3:
 
     # ---- Apply overrides with cascade insertion ------------------------
     points_map = get_point_system_for_year(override_season)
-    modified = season_results.copy()
-
-    def _recompute_points(df: pd.DataFrame) -> pd.DataFrame:
-        df = df.copy()
-        df["points"] = df["position"].apply(
-            lambda p: float(points_map.get(int(p), 0)) if pd.notna(p) else 0.0
-        )
-        return df
-
-    for ov in overrides:
-        rd = ov["round"]
-        race_mask = modified["round"] == rd
-        if not race_mask.any():
-            continue
-        race_slice = modified[race_mask].copy().sort_values("position", na_position="last")
-
-        d_mask = race_slice["driver_id"] == ov["driver_id"]
-        if not d_mask.any():
-            continue
-
-        old_p = ov["orig_pos"]
-        new_p = ov["new_pos"]
-
-        # Step 1: vacate the chosen driver's old slot — drivers below shift up.
-        if old_p is not None:
-            shift_up = (race_slice["position"].notna()) & (race_slice["position"] > old_p)
-            race_slice.loc[shift_up, "position"] = race_slice.loc[shift_up, "position"] - 1
-
-        # Step 2: insert the chosen driver at the new slot — push others down.
-        if new_p is not None:
-            shift_down = (race_slice["position"].notna()) & (race_slice["position"] >= new_p) & (~d_mask)
-            race_slice.loc[shift_down, "position"] = race_slice.loc[shift_down, "position"] + 1
-            race_slice.loc[d_mask, "position"] = new_p
-        else:
-            # Becoming DNF — clear position; no further shift needed beyond step 1.
-            race_slice.loc[d_mask, "position"] = None
-
-        # Recompute points across the whole race using the season's points system.
-        race_slice = _recompute_points(race_slice)
-        modified = pd.concat([modified[~race_mask], race_slice], ignore_index=True)
-
-    modified = modified.sort_values(["round", "position"], na_position="last").reset_index(drop=True)
+    modified = apply_overrides(season_results, overrides, points_map)
 
     # ---- Show standings comparison -------------------------------------
     original = calculate_standings(season_results)
@@ -354,43 +265,19 @@ with tab3:
     st.subheader("Standings impact")
     col1, col2 = st.columns(2)
     col1.markdown("**Original**")
-    col1.dataframe(
-        original[["driver_name", "total_points", "wins"]].rename(
-            columns={"driver_name": "Driver", "total_points": "Points", "wins": "Wins"}
-        ).head(15),
-        use_container_width=True,
-    )
+    col1.dataframe(_standings_table(original), use_container_width=True)
     col2.markdown("**With overrides applied**")
-    col2.dataframe(
-        new_standings[["driver_name", "total_points", "wins"]].rename(
-            columns={"driver_name": "Driver", "total_points": "Points", "wins": "Wins"}
-        ).head(15),
-        use_container_width=True,
-    )
+    col2.dataframe(_standings_table(new_standings), use_container_width=True)
 
-    # Position-change bar chart
-    orig_rank = {r["driver_name"]: i + 1 for i, (_, r) in enumerate(original.iterrows())}
-    new_rank = {r["driver_name"]: i + 1 for i, (_, r) in enumerate(new_standings.iterrows())}
-    changes = []
-    for d, op in orig_rank.items():
-        np_ = new_rank.get(d, op)
-        if np_ != op:
-            changes.append({"Driver": d, "Change": op - np_})
-
-    if changes:
-        ch_df = pd.DataFrame(changes).sort_values("Change", ascending=False)
-        fig = go.Figure(go.Bar(
-            x=ch_df["Change"], y=ch_df["Driver"], orientation="h",
-            marker_color=["#22c55e" if c > 0 else "#ef4444" for c in ch_df["Change"]],
-            text=ch_df["Change"].apply(lambda x: f"+{x}" if x > 0 else str(x)),
-            textposition="auto",
-        ))
-        fig.update_layout(
-            template=PLOTLY_TEMPLATE,
-            yaxis=dict(autorange="reversed"),
-            xaxis_title="Championship position change (positive = moved up)",
-            height=400,
+    change_df = standings_rank_changes(original, new_standings)
+    if not change_df.empty:
+        st.plotly_chart(
+            position_change_bar(
+                change_df,
+                "Championship position change (positive = moved up)",
+                height=400,
+            ),
+            use_container_width=True,
         )
-        st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No championship-position changes from these overrides.")
