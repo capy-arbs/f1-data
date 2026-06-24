@@ -1,18 +1,50 @@
-"""Live Race — real-time timing, Time-to-Strike predictor, weather and race control.
+"""Live Session — real-time timing, Time-to-Strike predictor, weather and race control.
 
-Pulls live data from F1's timing feed (direct SignalR REST endpoints during
-active sessions, FastF1 for completed sessions). When no race is in progress,
-defaults to the most recent session so the page is always populated.
+Works for any session type (practice, qualifying, sprint, race), so there's
+live or recent data to look at on every day of a race weekend. Pulls from F1's
+timing feed (direct SignalR REST endpoints during active sessions, FastF1 for
+completed sessions). When nothing is live, defaults to the most recent session
+so the page is always populated.
+
+Time-to-Strike only produces a meaningful verdict during a Race or Sprint —
+the gap-closing model assumes on-track running order. The widget stays usable
+in other sessions for data inspection, but flags itself as non-race.
 """
 
 from __future__ import annotations
 
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import streamlit as st
+
+from charts.live_charts import gap_evolution_chart, pace_trace_chart, stint_gantt
+from data.live import (
+    build_live_grid,
+    feed_status,
+    get_classification,
+    get_drivers,
+    get_intervals,
+    get_laps,
+    get_latest_session,
+    get_position,
+    get_race_control,
+    get_stints,
+    get_weather,
+    list_sessions,
+    live_diagnostics,
+)
+from db.schema import init_db
+from queries.strike import all_strike_pairs, compute_strike
+
+# Cached fetchers cleared together on manual refresh and on each auto-refresh
+# tick so the TTLs are bypassed and the page pulls genuinely fresh data.
+_REFRESH_FNS = (
+    get_intervals, get_position, get_classification, get_laps,
+    get_stints, get_weather, get_race_control,
+)
 
 
 _SESSION_DURATIONS = {
@@ -25,6 +57,17 @@ _SESSION_DURATIONS = {
     "Practice 2": timedelta(hours=1, minutes=30),
     "Practice 3": timedelta(hours=1, minutes=30),
 }
+
+
+# Time-to-Strike's gap-closing model only makes sense where the running order
+# reflects on-track position — i.e. a Race or a Sprint. In practice/qualifying
+# the "gaps" are lap-timing artefacts, not cars chasing each other down.
+_RACE_SESSIONS = {"Race", "Sprint"}
+
+
+def _is_race_session(sess: dict) -> bool:
+    """Whether ``sess`` is a Race or Sprint (where Time-to-Strike is meaningful)."""
+    return sess.get("session_name", "") in _RACE_SESSIONS
 
 
 def _is_live(sess: dict) -> bool:
@@ -40,9 +83,9 @@ def _is_live(sess: dict) -> bool:
         if isinstance(start, str):
             start = datetime.fromisoformat(start)
         if start.tzinfo is None:
-            start = start.replace(tzinfo=timezone.utc)
+            start = start.replace(tzinfo=UTC)
         duration = _SESSION_DURATIONS.get(sess.get("session_name", ""), timedelta(hours=3))
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         return start <= now <= start + duration
     except (TypeError, ValueError, AttributeError):
         return False
@@ -57,10 +100,10 @@ def _time_since_end(sess: dict) -> str | None:
         if isinstance(start, str):
             start = datetime.fromisoformat(start)
         if start.tzinfo is None:
-            start = start.replace(tzinfo=timezone.utc)
+            start = start.replace(tzinfo=UTC)
         duration = _SESSION_DURATIONS.get(sess.get("session_name", ""), timedelta(hours=3))
         end = start + duration
-        delta: timedelta = datetime.now(timezone.utc) - end
+        delta: timedelta = datetime.now(UTC) - end
         if delta.total_seconds() < 0:
             return None
         days = delta.days
@@ -74,29 +117,12 @@ def _time_since_end(sess: dict) -> str | None:
     except (TypeError, ValueError, AttributeError):
         return None
 
-from db.schema import init_db
-from data.live import (
-    list_sessions,
-    get_latest_session,
-    get_drivers,
-    get_intervals,
-    get_position,
-    get_laps,
-    get_stints,
-    get_weather,
-    get_race_control,
-    build_live_grid,
-    feed_status,
-)
-from queries.strike import compute_strike, all_strike_pairs
-from charts.live_charts import stint_gantt, pace_trace_chart, gap_evolution_chart
-
 init_db()
 
-st.title("Live Race")
+st.title("Live Session")
 st.caption(
-    "Real-time data from the F1 timing feed. "
-    "Falls back to the latest completed session when no race is running."
+    "Real-time timing for any session — practice, qualifying, sprint or race. "
+    "Falls back to the latest completed session when nothing is live."
 )
 
 
@@ -130,7 +156,7 @@ with st.sidebar:
             st.error("Could not reach F1 timing feed. Check your connection.")
             st.stop()
     else:
-        year = st.selectbox("Season", list(range(datetime.now(timezone.utc).year, 2017, -1)), index=0)
+        year = st.selectbox("Season", list(range(datetime.now(UTC).year, 2017, -1)), index=0)
         sessions_df = list_sessions(year)
         if sessions_df.empty:
             st.warning("No sessions found for that year.")
@@ -168,7 +194,7 @@ session_label = f"{sess.get('country_name') or sess.get('location', '?')} — {s
 
 # Force-clear caches so 'Refresh now' actually fetches fresh data instead of serving from TTL.
 if refresh:
-    for fn in (get_intervals, get_position, get_laps, get_stints, get_weather, get_race_control):
+    for fn in _REFRESH_FNS:
         fn.clear()
 
 
@@ -192,6 +218,7 @@ else:
 drivers = get_drivers(session_key)
 intervals = get_intervals(session_key)
 positions = get_position(session_key)
+classification = get_classification(session_key)
 laps = get_laps(session_key)
 stints = get_stints(session_key)
 weather = get_weather(session_key)
@@ -211,6 +238,35 @@ if _source == "live":
     st.caption("Data source: F1 Live Timing (real-time)")
 elif _source == "fastf1":
     st.caption("Data source: FastF1 (cached session data — may be stale for recent sessions)")
+
+# Diagnostic: the schedule says this session is live, but no driver data came
+# back. Surface exactly why the live feed was empty (it's otherwise swallowed by
+# the FastF1 fallback) so a real live session tells us the root cause.
+if live_now and drivers.empty:
+    _diag = live_diagnostics()
+    _outcome = _diag.get("outcome")
+    _hints = {
+        "not_in_live_window": (
+            "The live-timing window (`_has_live_timing`) disagreed with the LIVE "
+            "badge, so the live client was never tried — the two live checks need "
+            "to be reconciled."
+        ),
+        "empty": (
+            "The live client reached F1 but got no rows. If the detail is an HTTP "
+            "404, the static archive isn't served during the session and we need "
+            "the SignalR feed; otherwise it's a parse issue on partial data."
+        ),
+        "exception": "The live client raised — likely a parse bug on partial mid-session data.",
+        "no_such_fn": "Internal: live client is missing the requested function.",
+        "ok": "Live client reported success but the grid is still empty — check downstream shaping.",
+    }
+    st.error(
+        "**Live session detected, but no live data was returned.**\n\n"
+        f"- Live fetch: `{_diag.get('fn')}`\n"
+        f"- Outcome: `{_outcome}`\n"
+        f"- Detail: {_diag.get('detail') or '—'}\n\n"
+        + _hints.get(_outcome, "Unrecognised outcome — check logs.")
+    )
 
 current_lap = int(laps["lap_number"].max()) if not laps.empty else 0
 header_cols[1].metric("Current Lap", current_lap if current_lap else "—")
@@ -235,7 +291,7 @@ st.divider()
 
 # -- Live standings table --------------------------------------------------
 
-grid = build_live_grid(drivers, positions, intervals, laps, stints)
+grid = build_live_grid(drivers, positions, intervals, laps, stints, classification)
 
 # Session bests + per-driver personal bests for sector colouring (S1/S2/S3).
 # Computed once from the full laps frame and merged into the standings row.
@@ -291,6 +347,12 @@ else:
         lambda r: f"{r['compound']} ({int(r['tyre_age'])})" if pd.notna(r.get("compound")) and pd.notna(r.get("tyre_age")) else "—",
         axis=1,
     )
+
+    # Mark retired drivers (classified at their finishing position but no longer
+    # circulating) so a DNF reads as a DNF instead of a stale gap.
+    if "retired" in show.columns:
+        retired_rows = show["retired"].fillna(False).astype(bool)
+        show.loc[retired_rows, "Gap"] = "DNF"
 
     visible_cols = ["Pos", "Driver", "Team", "Gap", "Interval", "S1", "S2", "S3", "Last Lap", "Tire"]
 
@@ -393,6 +455,18 @@ else:
 st.divider()
 st.subheader("Time to Strike")
 st.caption("Pick a chaser and a target. We estimate how many laps until the chaser closes the gap, given current pace.")
+
+# Time-to-Strike assumes the running order is on-track racing position, which
+# only holds in a Race or Sprint. In practice/qualifying the gaps are lap-timing
+# artefacts, so we keep the widget usable for inspecting data but flag that the
+# verdict isn't real racing.
+if not _is_race_session(sess):
+    st.info(
+        f"**Time-to-Strike only truly works during a Race or Sprint.** "
+        f"This is a **{sess.get('session_name', 'non-race')}** session, so the "
+        "gaps below reflect lap timing rather than cars chasing each other down "
+        "— treat any verdict as a data preview, not a real overtake prediction."
+    )
 
 if grid.empty:
     st.info("Need driver data to compute Time-to-Strike.")
@@ -564,6 +638,6 @@ if auto_refresh:
     # Visible note so the user knows what's happening; spinner-free to avoid layout shift.
     st.caption(f"Auto-refresh in {interval}s …")
     time.sleep(interval)
-    for fn in (get_intervals, get_position, get_laps, get_stints, get_weather, get_race_control):
+    for fn in _REFRESH_FNS:
         fn.clear()
     st.rerun()

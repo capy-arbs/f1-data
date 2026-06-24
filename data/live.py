@@ -1,16 +1,19 @@
-"""Live F1 timing data via FastF1.
+"""Live F1 timing data — dual-source router.
 
-Replaces OpenF1 after OpenF1 gated live-session data behind a paid tier on
-2026-05-23. FastF1 (https://github.com/theOehrly/Fast-F1) is the
-community-standard Python library that taps F1's own SignalR timing feed —
-the same source the official broadcast uses — and remains free during
-live sessions.
+Each public function tries F1's direct live-timing REST feed first (via
+``data/f1_live_client.py``, which polls the ``livetiming.formula1.com/static``
+``.jsonStream`` files used by the official broadcast) and falls back to FastF1
+for completed sessions. Routing is automatic in ``_try_live_client`` /
+``_has_live_timing``: live or about-to-start sessions in the current year go to
+the REST client; everything else loads through FastF1. This replaced an
+OpenF1-only path (gated behind a paid tier 2026-05-23) and then a FastF1-only
+path (``session.load()`` returns nothing mid-race, swapped 2026-05-24).
 
-**Architecture:** OpenF1 was a REST API returning JSON; FastF1 is a Python
-library that loads a session as a single object with attached DataFrames.
-This module wraps the session model and reshapes the output to match the
-previous OpenF1-compatible contracts so ``pages/14_Live_Race.py``,
-``queries/strike.py``, and other consumers don't need changes:
+**Architecture:** FastF1 (https://github.com/theOehrly/Fast-F1) loads a session
+as a single object with attached DataFrames; the live client returns the same
+shapes directly from the REST feed. Both reshape to the OpenF1-compatible
+contracts so ``pages/14_Live_Race.py``, ``queries/strike.py``, and other
+consumers don't need to know which source served a given call:
 
 - ``session_key`` is now a ``"year|gp|identifier"`` string (e.g.
   ``"2026|Monaco|R"``), opaque to callers.
@@ -36,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import UTC
 
 import fastf1
 import fastf1.exceptions
@@ -43,7 +47,6 @@ import pandas as pd
 import streamlit as st
 
 from data import f1_live_client as _live_client
-
 
 # Quiet FastF1's INFO chatter so Streamlit logs aren't noisy.
 fastf1.set_log_level("WARNING")
@@ -60,6 +63,11 @@ fastf1.Cache.enable_cache(_CACHE_DIR)
 # pages/14_Live_Race.py keep working.
 _LAST_STATUS: dict = {"code": None, "message": None}
 
+# Outcome of the most recent live-client attempt, separate from _LAST_STATUS
+# (which FastF1 overwrites on fallback). Lets the Live Race page show *why* the
+# live feed is empty mid-session instead of silently looking broken.
+_LIVE_DIAG: dict = {"fn": None, "outcome": None, "detail": None}
+
 
 def feed_status() -> dict:
     """Outcome of the most recent FastF1 load.
@@ -72,6 +80,17 @@ def feed_status() -> dict:
     return dict(_LAST_STATUS)
 
 
+def live_diagnostics() -> dict:
+    """Why the last live-client attempt did or didn't return data.
+
+    ``outcome`` is one of: ``"not_in_live_window"`` (FastF1 is the expected
+    source), ``"no_such_fn"``, ``"exception"``, ``"empty"`` (ran but returned
+    no rows — ``detail`` carries the client's own status, e.g. an HTTP 404),
+    or ``"ok"``. Reflects the last live-routed fetch in the current render.
+    """
+    return dict(_LIVE_DIAG)
+
+
 # -- Live-timing routing ---------------------------------------------------
 
 def _has_live_timing(session_key: str) -> bool:
@@ -80,12 +99,12 @@ def _has_live_timing(session_key: str) -> bool:
     Returns True for sessions in the current year that started within the
     last 12 hours or are about to start within 30 minutes.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
     try:
         year, _, _ = _parse_key(session_key)
     except (ValueError, IndexError):
         return False
-    if year < datetime.now(timezone.utc).year:
+    if year < datetime.now(UTC).year:
         return False
     df = list_sessions(year)
     if df.empty:
@@ -93,31 +112,44 @@ def _has_live_timing(session_key: str) -> bool:
     match = df[df["session_key"] == session_key]
     if match.empty:
         return False
-    now = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
+    now = pd.Timestamp(datetime.now(UTC)).tz_localize(None)
     start = pd.Timestamp(match.iloc[0]["date_start"])
     hours = (now - start).total_seconds() / 3600
     return -0.5 <= hours <= 12
 
 
 def _try_live_client(fn_name: str, *args, **kwargs) -> pd.DataFrame | None:
-    """Try F1's direct live timing API; return ``None`` to fall back to FastF1."""
+    """Try F1's direct live timing API; return ``None`` to fall back to FastF1.
+
+    Records the outcome in ``_LIVE_DIAG`` so the page can explain an empty live
+    feed. ``_LAST_STATUS`` is only touched on success — on failure we leave it
+    for FastF1's fallback to populate, but the diagnostic preserves the cause.
+    """
+    log = logging.getLogger(__name__)
     if not args or not _has_live_timing(args[0]):
+        _LIVE_DIAG.update(fn=fn_name, outcome="not_in_live_window", detail=None)
         return None
     fn = getattr(_live_client, fn_name, None)
     if fn is None:
+        _LIVE_DIAG.update(fn=fn_name, outcome="no_such_fn", detail=fn_name)
         return None
     try:
         result = fn(*args, **kwargs)
-        if not result.empty:
-            status = _live_client.feed_status()
-            status["source"] = "live"
-            _LAST_STATUS.update(**status)
-            return result
     except Exception as exc:
-        logging.getLogger(__name__).warning(
-            "Live client %s failed: %s", fn_name, exc, exc_info=True,
-        )
-    return None
+        log.warning("Live client %s failed: %s", fn_name, exc, exc_info=True)
+        _LIVE_DIAG.update(fn=fn_name, outcome="exception",
+                          detail=f"{type(exc).__name__}: {exc}")
+        return None
+    if result.empty:
+        detail = _live_client.feed_status().get("message") or "no rows returned"
+        log.warning("Live client %s returned empty: %s", fn_name, detail)
+        _LIVE_DIAG.update(fn=fn_name, outcome="empty", detail=detail)
+        return None
+    status = _live_client.feed_status()
+    status["source"] = "live"
+    _LAST_STATUS.update(**status)
+    _LIVE_DIAG.update(fn=fn_name, outcome="ok", detail=None)
+    return result
 
 
 # -- session_key helpers ---------------------------------------------------
@@ -239,9 +271,9 @@ def list_sessions(year: int | None = None) -> pd.DataFrame:
     ``session_key``, ``session_name``, ``country_name``, ``location``,
     ``year``, ``date_start``, ``date_end``.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
     if year is None:
-        year = datetime.now(timezone.utc).year
+        year = datetime.now(UTC).year
     try:
         sched = fastf1.get_event_schedule(year, include_testing=False)
         _LAST_STATUS.update(code=None, message=None)
@@ -290,13 +322,13 @@ def get_latest_session() -> dict | None:
     """Most recent session whose date_start is in the past, or the next
     upcoming session if none have started yet.
     """
-    from datetime import datetime, timezone
-    now = pd.Timestamp(datetime.now(timezone.utc)).tz_localize(None)
+    from datetime import datetime
+    now = pd.Timestamp(datetime.now(UTC)).tz_localize(None)
 
     # Try current and previous year — early in a season the schedule for
     # the current year may have no completed sessions yet.
     for yr_offset in (0, -1):
-        df = list_sessions(datetime.now(timezone.utc).year + yr_offset)
+        df = list_sessions(datetime.now(UTC).year + yr_offset)
         if df.empty:
             continue
         past = df[df["date_start"] <= now]
@@ -461,6 +493,49 @@ def get_position(session_key) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
+# -- Classification (authoritative running order) -------------------------
+
+def _is_finisher_status(status) -> bool:
+    """Whether a FastF1 ``Status`` string means the driver was running at the
+    flag. ``"Finished"``, ``"Lapped"``, ``"+1 Lap"`` count; ``"Retired"``,
+    ``"Accident"``, ``"Engine"``, ``"Did not start"`` etc. don't.
+    """
+    s = str(status).lower()
+    return s == "finished" or "lap" in s
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def get_classification(session_key) -> pd.DataFrame:
+    """Authoritative running order / final classification per driver.
+
+    ``get_position`` is a lap-by-lap time series: a retired driver's last row
+    is frozen at the on-track position they held when they stopped (e.g. a car
+    that drops out while running P2 stays "P2" forever). This instead returns
+    the *classified* position — retirements sorted to the back — plus a status
+    string, so the standings reflect who's actually still in the race.
+
+    Columns: ``driver_number`` (Int64), ``position`` (Int64), ``status`` (str),
+    ``retired`` (bool). Empty when no classification exists yet (e.g. a live
+    session FastF1 hasn't finished ingesting) — callers fall back to
+    ``get_position``.
+    """
+    live = _try_live_client("get_classification", session_key)
+    if live is not None:
+        return live
+    sess = _load_session(session_key)
+    res = _safe_attr(sess, "results")
+    if res is None or res.empty:
+        return pd.DataFrame(columns=["driver_number", "position", "status", "retired"])
+    status = res["Status"].astype(str)
+    df = pd.DataFrame({
+        "driver_number": pd.to_numeric(res["DriverNumber"], errors="coerce").astype("Int64"),
+        "position": pd.to_numeric(res["Position"], errors="coerce").astype("Int64"),
+        "status": status,
+        "retired": ~status.map(_is_finisher_status),
+    })
+    return df.dropna(subset=["driver_number"]).reset_index(drop=True)
+
+
 # -- Stints (derived from laps) -------------------------------------------
 
 @st.cache_data(ttl=30, show_spinner=False)
@@ -523,7 +598,7 @@ def get_pits(session_key) -> pd.DataFrame:
     rows = []
     for drv, grp in laps.groupby("DriverNumber"):
         grp = grp.sort_values("LapNumber")
-        for idx, row in grp.iterrows():
+        for _idx, row in grp.iterrows():
             if pd.notna(row["PitInTime"]):
                 # Find this driver's next pit-out time.
                 future = grp[(grp["LapNumber"] > row["LapNumber"]) &
@@ -656,16 +731,28 @@ def build_live_grid(
     intervals_df: pd.DataFrame,
     laps_df: pd.DataFrame,
     stints_df: pd.DataFrame,
+    classification_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    """One-row-per-driver snapshot of the current race state."""
+    """One-row-per-driver snapshot of the current race state.
+
+    When ``classification_df`` (from ``get_classification``) is supplied and
+    non-empty it's the authoritative source for ``position`` — it puts retired
+    drivers at the back instead of leaving them frozen at the on-track position
+    they held when they stopped. Falls back to the lap-derived ``position_df``
+    when no classification is available (e.g. mid-session before FastF1 has it).
+    """
     if drivers_df.empty:
         return pd.DataFrame()
 
-    pos = (
-        latest_positions(position_df)[["driver_number", "position"]]
-        if not position_df.empty
-        else pd.DataFrame(columns=["driver_number", "position"])
-    )
+    use_classification = classification_df is not None and not classification_df.empty
+    if use_classification:
+        pos = classification_df[["driver_number", "position", "status", "retired"]]
+    else:
+        pos = (
+            latest_positions(position_df)[["driver_number", "position"]]
+            if not position_df.empty
+            else pd.DataFrame(columns=["driver_number", "position"])
+        )
     iv = (
         latest_intervals(intervals_df)[["driver_number", "gap_to_leader", "interval"]]
         if not intervals_df.empty
@@ -693,6 +780,12 @@ def build_live_grid(
         stints[["driver_number", "compound", "tyre_age"]] if not stints.empty else stints,
     ):
         grid = grid.merge(piece, on="driver_number", how="left")
+
+    # A retired driver has no live gap/interval — blank them so the standings
+    # don't show a stale "+2.3s" for a car that's been parked for 20 laps.
+    if "retired" in grid.columns:
+        retired_mask = grid["retired"].fillna(False).astype(bool)
+        grid.loc[retired_mask, ["gap_to_leader", "interval"]] = float("nan")
 
     if "position" in grid.columns:
         grid = grid.sort_values("position", na_position="last").reset_index(drop=True)

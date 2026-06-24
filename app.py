@@ -151,10 +151,11 @@ st.plotly_chart = _plotly_chart_with_modebar
 # Each page is created once and used twice: once in the navigation dict
 # (which handles routing) and once via st.page_link in our custom sidebar.
 
-# Live Race is the default landing page — it's the marquee feature, and it
-# falls back to the most recent completed session when no race is running,
-# so it's never empty.
-live_race_page = st.Page("pages/14_Live_Race.py", title="Live Race", default=True)
+# Live Session is the default landing page — it's the marquee feature, and it
+# falls back to the most recent completed session when nothing is live, so it's
+# never empty. Covers any session type (practice, qualifying, sprint, race) so
+# there's something to look at on every day of a race weekend.
+live_race_page = st.Page("pages/14_Live_Race.py", title="Live Session", default=True)
 
 # Each tuple: (group_label, [page, ...])
 GROUPS: list[tuple[str, list[st.Page]]] = [

@@ -479,6 +479,48 @@ def get_position(session_key) -> pd.DataFrame:
     return df
 
 
+def get_classification(session_key) -> pd.DataFrame:
+    """Authoritative running order: still-running cars first (by live position),
+    retired cars pushed to the back (by laps completed). F1's feed flags a car
+    ``Retired``/``Stopped`` but keeps its last position, so we re-rank rather
+    than trust the frozen number.
+    """
+    cols = ["driver_number", "position", "status", "retired"]
+    empty = pd.DataFrame(columns=cols)
+    timing = _fetch_stream(session_key, "TimingData.jsonStream")
+    if not timing:
+        return empty
+
+    drv_state: dict[str, dict] = {}
+    for _, data in timing:
+        for drv, updates in (data.get("Lines") or {}).items():
+            drv_state.setdefault(drv, {})
+            _deep_merge(drv_state[drv], updates)
+
+    rows = []
+    for drv, st in drv_state.items():
+        dn = _safe_int(drv)
+        if dn is None:
+            continue
+        rows.append({
+            "driver_number": dn,
+            "_pos": _safe_int(st.get("Position")),
+            "_laps": _safe_int(st.get("NumberOfLaps")) or 0,
+            "retired": bool(st.get("Retired") or st.get("Stopped")),
+        })
+    if not rows:
+        return empty
+
+    df = pd.DataFrame(rows)
+    running = df[~df["retired"]].sort_values("_pos", na_position="last")
+    out = df[df["retired"]].sort_values("_laps", ascending=False)
+    ordered = pd.concat([running, out], ignore_index=True)
+    ordered["position"] = pd.Series(range(1, len(ordered) + 1), dtype="Int64")
+    ordered["status"] = ordered["retired"].map(lambda r: "Retired" if r else "Running")
+    ordered["driver_number"] = ordered["driver_number"].astype("Int64")
+    return ordered[cols]
+
+
 def get_stints(session_key) -> pd.DataFrame:
     cols = ["driver_number", "stint_number", "compound",
             "lap_start", "lap_end", "tyre_age_at_start"]
