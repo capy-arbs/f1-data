@@ -1,11 +1,10 @@
 """Race Calendar — season schedule with results."""
 
 import streamlit as st
-from datetime import datetime
 
 from db.schema import init_db
-from queries.standings import get_available_seasons
 from queries.circuits import get_race_calendar
+from queries.standings import get_available_seasons
 
 init_db()
 

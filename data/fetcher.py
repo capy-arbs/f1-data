@@ -1,6 +1,7 @@
 """Raw API calls to the Jolpica (Ergast successor) F1 API."""
 
 import time
+
 import requests
 
 from config import API_BASE_URL, API_RATE_LIMIT_DELAY

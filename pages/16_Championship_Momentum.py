@@ -1,12 +1,12 @@
 """Championship Momentum — rolling form across the season."""
 
-import streamlit as st
 import plotly.graph_objects as go
+import streamlit as st
 
+from config import PLOTLY_TEMPLATE, TEAM_COLORS
 from db.schema import init_db
 from queries.historical import get_championship_momentum
 from queries.standings import get_available_seasons
-from config import PLOTLY_TEMPLATE, TEAM_COLORS
 
 init_db()
 

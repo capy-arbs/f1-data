@@ -2,22 +2,21 @@
 
 import streamlit as st
 
-from db.connection import get_db
-from queries.drivers import (
-    get_career_stats,
-    get_season_stats,
-    get_driver_seasons,
-    get_head_to_head,
-    get_teammate_seasons,
-    get_latest_constructor,
-)
-from queries.standings import get_available_seasons
 from charts.comparison_charts import (
-    season_comparison_bar,
     cumulative_wins_chart,
     h2h_qualifying_chart,
+    season_comparison_bar,
 )
 from config import TEAM_COLORS
+from queries.drivers import (
+    get_career_stats,
+    get_driver_seasons,
+    get_head_to_head,
+    get_latest_constructor,
+    get_season_stats,
+    get_teammate_seasons,
+)
+from queries.standings import get_available_seasons
 
 
 def render(drivers, title: str, caption: str) -> None:

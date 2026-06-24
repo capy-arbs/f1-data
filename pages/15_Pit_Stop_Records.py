@@ -1,12 +1,12 @@
 """Pit Stop Records — fastest pit stops leaderboard."""
 
-import streamlit as st
 import plotly.express as px
+import streamlit as st
 
+from config import PLOTLY_TEMPLATE
 from db.schema import init_db
 from queries.historical import get_fastest_pit_stops
 from queries.standings import get_available_seasons
-from config import PLOTLY_TEMPLATE
 
 init_db()
 

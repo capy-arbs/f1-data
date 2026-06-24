@@ -9,6 +9,7 @@ main-race-only since those are tracked separately by F1.
 """
 
 import pandas as pd
+
 from db.connection import get_db
 
 

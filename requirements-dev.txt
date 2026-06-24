@@ -1,0 +1,4 @@
+# Dev/CI-only tooling. Not installed on Streamlit Cloud.
+-r requirements.txt
+pytest>=8.0,<10.0
+ruff>=0.6,<1.0

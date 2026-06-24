@@ -2,12 +2,12 @@
 
 import streamlit as st
 
-from db.schema import init_db
-from db.connection import get_db
-from queries.standings import get_available_seasons, get_rounds_for_season
-from queries.races import get_race_results, get_race_info, get_pit_stops, get_qualifying_results
+from charts.race_charts import dnf_chart, fastest_laps_chart, grid_vs_finish_chart, pit_stop_chart
 from data.loader import load_pit_stops_for_race
-from charts.race_charts import grid_vs_finish_chart, fastest_laps_chart, pit_stop_chart, dnf_chart
+from db.connection import get_db
+from db.schema import init_db
+from queries.races import get_pit_stops, get_race_info, get_race_results
+from queries.standings import get_available_seasons, get_rounds_for_season
 
 init_db()
 

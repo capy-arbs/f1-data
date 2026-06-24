@@ -17,11 +17,10 @@ notes still layer on top so the UI can show *why* a verdict was given.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 
 import numpy as np
 import pandas as pd
-
 
 # Number of recent laps used to estimate pace. Long enough to reject one-off
 # blips (lap-to-lap noise on the order of 0.3-0.5s), short enough that a stint
@@ -378,7 +377,7 @@ def compute_strike(
     if laps_remaining is not None and laps_to_catch > laps_remaining:
         result.verdict = f"Won't catch before flag (needs {laps_to_catch}, only {laps_remaining} left)"
     elif laps_to_catch <= 1 and gap <= PROXIMITY_THRESHOLD_S:
-        result.verdict = f"Within 1 second — overtake imminent"
+        result.verdict = "Within 1 second — overtake imminent"
     elif laps_to_catch == 1:
         result.verdict = f"Catches {result.target} on the next lap"
     else:

@@ -72,7 +72,11 @@ def db_with_fixture(monkeypatch):
 
     # Patch every module that imports get_db locally.
     import queries.drivers as q_drivers
+    import queries.historical as q_historical
+    import queries.what_if as q_what_if
     monkeypatch.setattr(q_drivers, "get_db", fake_get_db)
+    monkeypatch.setattr(q_historical, "get_db", fake_get_db)
+    monkeypatch.setattr(q_what_if, "get_db", fake_get_db)
 
     yield conn
     conn.close()
@@ -138,3 +142,22 @@ def test_get_teammate_seasons_includes_sprint_points(db_with_fixture):
     assert not df.empty
     assert df["d1_points"].iloc[0] == pytest.approx(13.0)
     assert df["d2_points"].iloc[0] == pytest.approx(6.0)
+
+
+def test_what_if_get_season_results_includes_sprint_points(db_with_fixture):
+    """What-If's get_season_results (the 2026-05-23 regression site, now in
+    queries/what_if.py) must report per-race points = main + sprint."""
+    from queries.what_if import get_season_results
+    df = get_season_results(2026)
+    assert not df.empty
+    row = df[df["driver_id"] == "test_driver"].iloc[0]
+    assert row["points"] == pytest.approx(13.0)
+
+
+def test_normalized_season_points_actual_includes_sprint(db_with_fixture):
+    """get_normalized_season_points' actual_points total must union sprint so
+    it matches official standings (Championship Momentum / normalized view)."""
+    from queries.historical import get_normalized_season_points
+    df = get_normalized_season_points("test_driver")
+    assert not df.empty
+    assert df["actual_points"].iloc[0] == pytest.approx(13.0)

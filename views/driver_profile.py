@@ -1,17 +1,17 @@
 """Shared renderer for the Driver Profiles pages (current grid + full archive)."""
 
-import streamlit as st
 import plotly.graph_objects as go
+import streamlit as st
 
+from config import PLOTLY_TEMPLATE
 from db.connection import get_db
 from queries.drivers import (
     get_career_stats,
-    get_season_stats,
     get_driver_seasons,
+    get_season_stats,
     get_season_supplements,
 )
 from queries.standings import get_available_seasons
-from config import PLOTLY_TEMPLATE
 
 
 def render(drivers, title: str, caption: str) -> None:

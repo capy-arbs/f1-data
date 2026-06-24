@@ -2,20 +2,19 @@
 
 import sys
 import time
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
-from db.connection import get_db
+from config import API_RATE_LIMIT_DELAY
 from data.fetcher import (
-    fetch_seasons,
+    fetch_constructor_standings_for_round,
+    fetch_driver_standings_for_round,
+    fetch_pit_stops,
+    fetch_qualifying,
     fetch_races,
     fetch_results,
-    fetch_qualifying,
+    fetch_seasons,
     fetch_sprint_results,
-    fetch_pit_stops,
-    fetch_driver_standings_for_round,
-    fetch_constructor_standings_for_round,
 )
-from config import API_RATE_LIMIT_DELAY
 
 
 def _already_fetched(conn, endpoint: str, season: int, round_num: int = 0) -> bool:
@@ -26,11 +25,12 @@ def _already_fetched(conn, endpoint: str, season: int, round_num: int = 0) -> bo
     ).fetchone()
     if row is None:
         return False
-    # For current year, re-fetch if older than 24 hours
-    if season == datetime.now().year:
-        from datetime import timedelta
-        fetched = datetime.fromisoformat(row["fetched_at"])
-        if datetime.now() - fetched > timedelta(hours=24):
+    # For current year, re-fetch if older than 24 hours. fetched_at is written
+    # by SQLite's datetime('now') (UTC), so compare in UTC — not naive local
+    # time, which would skew the window by the machine's UTC offset.
+    if season == datetime.now(UTC).year:
+        fetched = datetime.fromisoformat(row["fetched_at"]).replace(tzinfo=UTC)
+        if datetime.now(UTC) - fetched > timedelta(hours=24):
             return False
     return True
 

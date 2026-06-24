@@ -31,7 +31,6 @@ from queries.strike import (
     compute_strike,
 )
 
-
 # -- Fixtures helpers -------------------------------------------------
 
 def _laps_frame(driver, durations, pit_out=None):

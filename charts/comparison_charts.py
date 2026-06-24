@@ -1,11 +1,9 @@
 """Plotly charts for Head-to-Head and Historical pages."""
 
-import plotly.express as px
-import plotly.graph_objects as go
 import pandas as pd
+import plotly.graph_objects as go
 
 from config import PLOTLY_TEMPLATE
-
 
 _DEFAULT_D1 = "#E10600"
 _DEFAULT_D2 = "#3671C6"

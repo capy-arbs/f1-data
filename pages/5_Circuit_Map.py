@@ -1,15 +1,14 @@
 """Circuit Explorer — track outline view, race history, decade summaries."""
 
-import streamlit as st
 import plotly.graph_objects as go
-import pandas as pd
+import streamlit as st
 
-from db.schema import init_db
+from config import PLOTLY_TEMPLATE
+from data.track_geojson import get_track_outline
 from db.connection import get_db
+from db.schema import init_db
 from queries.circuits import get_all_circuits, get_circuit_history
 from queries.standings import get_available_seasons
-from data.track_geojson import get_track_outline
-from config import PLOTLY_TEMPLATE
 
 init_db()
 

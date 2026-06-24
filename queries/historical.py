@@ -1,8 +1,9 @@
 """SQL queries for historical records and era comparisons."""
 
 import pandas as pd
-from db.connection import get_db
+
 from data.normalizer import normalize_points
+from db.connection import get_db
 
 
 def get_career_comparison(driver_ids: list[str]) -> pd.DataFrame:

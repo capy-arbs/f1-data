@@ -2,15 +2,15 @@
 
 import streamlit as st
 
+from charts.season_charts import points_accumulation_chart, position_progression_chart
 from db.schema import init_db
 from queries.standings import (
     get_available_seasons,
-    get_driver_standings,
     get_constructor_standings,
+    get_driver_standings,
     get_position_progression,
     get_rounds_for_season,
 )
-from charts.season_charts import position_progression_chart, points_accumulation_chart
 
 init_db()
 

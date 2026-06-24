@@ -1,6 +1,7 @@
 """SQL queries for race results and pit stops."""
 
 import pandas as pd
+
 from db.connection import get_db
 
 

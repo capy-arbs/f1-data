@@ -1,13 +1,12 @@
 """Lap Time Evolution — fastest race lap at one circuit, year by year."""
 
-import streamlit as st
-import plotly.express as px
 import plotly.graph_objects as go
+import streamlit as st
 
+from config import PLOTLY_TEMPLATE
 from db.schema import init_db
 from queries.circuits import get_all_circuits
 from queries.historical import get_lap_time_evolution
-from config import PLOTLY_TEMPLATE
 
 init_db()
 

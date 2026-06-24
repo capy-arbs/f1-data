@@ -2,16 +2,16 @@
 
 import streamlit as st
 
+from charts.comparison_charts import career_comparison_radar, normalized_points_chart
+from config import POINT_SYSTEMS
 from db.schema import init_db
 from queries.drivers import get_all_drivers
 from queries.historical import (
     get_career_comparison,
+    get_championship_wins,
     get_normalized_season_points,
     get_records,
-    get_championship_wins,
 )
-from charts.comparison_charts import career_comparison_radar, normalized_points_chart
-from config import POINT_SYSTEMS
 
 init_db()
 

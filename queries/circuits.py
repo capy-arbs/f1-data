@@ -1,6 +1,7 @@
 """SQL queries for circuit and calendar data."""
 
 import pandas as pd
+
 from db.connection import get_db
 
 

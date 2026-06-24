@@ -1,6 +1,7 @@
 """SQL queries for standings data."""
 
 import pandas as pd
+
 from db.connection import get_db
 
 

@@ -1,11 +1,12 @@
 """Data loading page — select seasons to fetch from the API."""
 
-import streamlit as st
 from datetime import datetime
 
-from db.schema import init_db
+import streamlit as st
+
+from data.loader import load_season, load_seasons
 from db.connection import get_db
-from data.loader import load_seasons, load_season
+from db.schema import init_db
 
 init_db()
 
@@ -74,7 +75,7 @@ else:
 if needed and st.button("Load Selected Seasons", type="primary", use_container_width=True):
     progress = st.progress(0, text="Starting...")
     for i, year in enumerate(needed):
-        def update(msg, pct):
+        def update(msg, pct, i=i):
             overall = (i + pct) / len(needed)
             progress.progress(overall, text=msg)
 
