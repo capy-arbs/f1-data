@@ -47,6 +47,7 @@ import pandas as pd
 import streamlit as st
 
 from data import f1_live_client as _live_client
+from data import f1_signalr as _live_signalr
 
 # Quiet FastF1's INFO chatter so Streamlit logs aren't noisy.
 fastf1.set_log_level("WARNING")
@@ -118,6 +119,38 @@ def _has_live_timing(session_key: str) -> bool:
     return -0.5 <= hours <= 12
 
 
+# Approximate session durations (hours) for deciding whether a session is
+# actually running *right now*. The SignalR feed always streams the currently
+# live session and isn't addressable by key, so we must only record the one
+# session whose live window contains "now" — otherwise viewing an already-ended
+# earlier session would capture the live session's data and mislabel it.
+_LIVE_DURATIONS_H = {"Race": 3.0, "Sprint": 1.5}
+_DEFAULT_DURATION_H = 2.0  # practice / qualifying, with buffer
+
+
+def _is_live_now(session_key: str) -> bool:
+    """Whether this exact session is on track at the current wall-clock time."""
+    from datetime import datetime
+    try:
+        year, _, _ = _parse_key(session_key)
+    except (ValueError, IndexError):
+        return False
+    if year != datetime.now(UTC).year:
+        return False
+    df = list_sessions(year)
+    if df.empty:
+        return False
+    match = df[df["session_key"] == session_key]
+    if match.empty:
+        return False
+    now = pd.Timestamp(datetime.now(UTC)).tz_localize(None)
+    start = pd.Timestamp(match.iloc[0]["date_start"])
+    name = str(match.iloc[0]["session_name"])
+    duration = _LIVE_DURATIONS_H.get(name, _DEFAULT_DURATION_H)
+    hours = (now - start).total_seconds() / 3600
+    return -0.1 <= hours <= duration
+
+
 def _try_live_client(fn_name: str, *args, **kwargs) -> pd.DataFrame | None:
     """Try F1's direct live timing API; return ``None`` to fall back to FastF1.
 
@@ -129,6 +162,13 @@ def _try_live_client(fn_name: str, *args, **kwargs) -> pd.DataFrame | None:
     if not args or not _has_live_timing(args[0]):
         _LIVE_DIAG.update(fn=fn_name, outcome="not_in_live_window", detail=None)
         return None
+    # While this session is actually on track the static .jsonStream archive
+    # doesn't exist yet, so stream it live over the SignalR websocket. Gated on
+    # _is_live_now (not the wider 12h static window) because the feed always
+    # serves the currently-live session and isn't addressable by key. Idempotent
+    # and non-blocking — the recording file fills in over the next few seconds.
+    if _is_live_now(args[0]):
+        _live_signalr.ensure_recording(args[0])
     fn = getattr(_live_client, fn_name, None)
     if fn is None:
         _LIVE_DIAG.update(fn=fn_name, outcome="no_such_fn", detail=fn_name)
@@ -141,6 +181,19 @@ def _try_live_client(fn_name: str, *args, **kwargs) -> pd.DataFrame | None:
                           detail=f"{type(exc).__name__}: {exc}")
         return None
     if result.empty:
+        # The SignalR recorder takes a few seconds after connecting to flush its
+        # first snapshot. While it's warming up, return the (empty, correctly
+        # shaped) live frame instead of falling through to FastF1 — the static
+        # archive 404/403s mid-session anyway, and a FastF1 load just burns a
+        # rate-limited API call and shows a scary banner. The page renders its
+        # "live session detected, data appears shortly" note from this diag.
+        if _is_live_now(args[0]) and _live_signalr.is_recording(args[0]):
+            _LIVE_DIAG.update(
+                fn=fn_name, outcome="live_warming_up",
+                detail="SignalR feed connected — data appears within a few seconds",
+            )
+            _LAST_STATUS.update(code=None, message=None, source="live")
+            return result
         detail = _live_client.feed_status().get("message") or "no rows returned"
         log.warning("Live client %s returned empty: %s", fn_name, detail)
         _LIVE_DIAG.update(fn=fn_name, outcome="empty", detail=detail)

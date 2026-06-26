@@ -21,6 +21,8 @@ import fastf1
 import pandas as pd
 import requests
 
+from data import f1_signalr
+
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://livetiming.formula1.com"
@@ -146,7 +148,18 @@ def _fetch_stream_raw(session_key: str, topic: str) -> list[tuple[str, dict]]:
 
 
 def _fetch_stream(session_key: str, topic: str) -> list[tuple[str, dict]]:
-    """Cached wrapper — deduplicates fetches within ``_STREAM_CACHE_TTL``."""
+    """Entries for a topic — live SignalR recording first, static archive next.
+
+    During a live session the static ``.jsonStream`` files don't exist yet (F1
+    publishes them only after the session archives), so we prefer the live
+    websocket recording captured by ``data/f1_signalr.py`` when one is present.
+    Falls through to the cached static-archive HTTP fetch otherwise.
+    """
+    live = f1_signalr.topic_entries(session_key, topic)
+    if live is not None:
+        _LAST_STATUS.update(code=None, message=None)
+        return live
+
     key = f"{session_key}|{topic}"
     now = _time.monotonic()
     cached = _STREAM_CACHE.get(key)
@@ -184,6 +197,15 @@ def _build_state(entries: list[tuple[str, dict]]) -> dict:
 def _parse_ts(ts_str: str, session_start: pd.Timestamp | None) -> pd.Timestamp:
     if not ts_str:
         return pd.NaT
+    # The SignalR live feed stamps records with an absolute ISO time
+    # ("2026-06-26T15:13:30.843Z"); the static .jsonStream archive uses a
+    # session-relative "H:MM:SS.mmm". Detect ISO and parse it as an absolute
+    # naive-UTC datetime so both sources flow through one code path.
+    if "T" in ts_str:
+        ts = pd.to_datetime(ts_str, utc=True, errors="coerce")
+        if ts is pd.NaT:
+            return pd.NaT
+        return ts.tz_localize(None)
     try:
         parts = _TS_SPLIT.split(ts_str.strip())
         h = int(parts[0]) if len(parts) > 0 else 0
@@ -253,6 +275,24 @@ def _normalize_stints(raw) -> dict:
     if isinstance(raw, dict):
         return raw
     return {}
+
+
+def _normalize_timing_line(updates: dict) -> dict:
+    """Normalise a single TimingData ``Lines`` update for clean merging.
+
+    Like Stints, the ``Sectors`` field arrives as a **list** in the initial
+    snapshot (indexed 0,1,2) but as an index-keyed **dict** (``{"0": {...}}``)
+    in subsequent deltas. Converting the list form to a dict before merging
+    keeps the snapshot's sector values and lets later deltas update them in
+    place instead of replacing the whole field. Returns a shallow copy with
+    only the rewritten key swapped, leaving the source dict untouched.
+    """
+    sectors = updates.get("Sectors")
+    if isinstance(sectors, list):
+        updates = {**updates,
+                   "Sectors": {str(i): s for i, s in enumerate(sectors)
+                               if isinstance(s, dict)}}
+    return updates
 
 
 def _collect_stint_state(timing_app_entries) -> dict[str, dict]:
@@ -383,7 +423,7 @@ def get_laps(session_key, driver_number: int | None = None) -> pd.DataFrame:
             if updates.get("PitOut") in (True, "true", "True"):
                 st["_pit_out"] = True
 
-            _deep_merge(st, updates)
+            _deep_merge(st, _normalize_timing_line(updates))
             new_n = _safe_int(st.get("NumberOfLaps"))
             if new_n is None:
                 continue

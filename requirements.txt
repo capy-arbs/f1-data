@@ -7,3 +7,6 @@ requests>=2.31.0,<3.0.0
 pandas>=2.1.0,<3.0.0
 numpy>=1.26.0,<3.0.0
 fastf1>=3.5.0,<4.0.0
+# Pulled in transitively by fastf1, but data/f1_signalr.py imports it directly
+# for the live SignalR websocket feed, so pin it explicitly.
+signalrcore>=0.9.5,<1.1.0
