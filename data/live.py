@@ -395,15 +395,7 @@ def get_latest_session() -> dict | None:
 # -- Drivers ---------------------------------------------------------------
 
 @st.cache_data(ttl=600, show_spinner=False)
-def get_drivers(session_key) -> pd.DataFrame:
-    """Driver list with number, acronym, full name, team name, team colour.
-
-    Returns columns: ``driver_number`` (int), ``name_acronym``,
-    ``full_name``, ``team_name``, ``team_colour`` (raw 6-char hex with
-    no leading ``#``). The no-``#`` shape matches the previous OpenF1
-    contract — ``charts/live_charts.py::pace_trace_chart`` does
-    ``"#" + team_colour`` on it.
-    """
+def _get_drivers_cached(session_key) -> pd.DataFrame:
     live = _try_live_client("get_drivers", session_key)
     if live is not None:
         return live
@@ -426,6 +418,34 @@ def get_drivers(session_key) -> pd.DataFrame:
         ),
     })
     return df.dropna(subset=["driver_number"]).reset_index(drop=True)
+
+
+def get_drivers(session_key) -> pd.DataFrame:
+    """Driver list with number, acronym, full name, team name, team colour.
+
+    Returns columns: ``driver_number`` (int), ``name_acronym``,
+    ``full_name``, ``team_name``, ``team_colour`` (raw 6-char hex with
+    no leading ``#``). The no-``#`` shape matches the previous OpenF1
+    contract — ``charts/live_charts.py::pace_trace_chart`` does
+    ``"#" + team_colour`` on it.
+
+    The driver list is static per session, so the underlying fetch is cached
+    for 600s. But during a *live* session it's briefly empty while the SignalR
+    recorder warms up (the DriverList snapshot lands a couple seconds after the
+    socket connects); without this, that empty would stick for the full 10min
+    TTL and the standings grid — which requires this frame — would stay blank
+    even as lap/weather data flowed. So drop a warm-up empty and let the next
+    rerun refetch.
+    """
+    df = _get_drivers_cached(session_key)
+    if df.empty and _is_live_now(session_key):
+        _get_drivers_cached.clear()
+    return df
+
+
+# Preserve the cache-clear API in case a caller (e.g. a manual "Refresh now")
+# clears this fetcher like the other cached ones.
+get_drivers.clear = _get_drivers_cached.clear
 
 
 # -- Laps + sectors --------------------------------------------------------
