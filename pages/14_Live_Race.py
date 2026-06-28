@@ -259,8 +259,18 @@ if live_now and drivers.empty:
         "exception": "The live client raised — likely a parse bug on partial mid-session data.",
         "no_such_fn": "Internal: live client is missing the requested function.",
         "ok": "Live client reported success but the grid is still empty — check downstream shaping.",
+        "live_warming_up": (
+            "The SignalR recorder has connected and is pulling the live feed — "
+            "the first data lands within a few seconds, so this should clear on "
+            "the next refresh. If it persists for more than ~30s, the recorder "
+            "connected but isn't receiving (a known Streamlit Cloud quirk after "
+            "the app sleeps): hit **Refresh now**, and if that doesn't help, "
+            "reboot the app from share.streamlit.io → Manage app → Reboot."
+        ),
     }
-    st.error(
+    # "warming_up" is an expected transient, not a failure — keep it calm.
+    _render = st.info if _outcome == "live_warming_up" else st.error
+    _render(
         "**Live session detected, but no live data was returned.**\n\n"
         f"- Live fetch: `{_diag.get('fn')}`\n"
         f"- Outcome: `{_outcome}`\n"
