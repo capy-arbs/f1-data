@@ -21,6 +21,7 @@ import pandas as pd
 import streamlit as st
 
 from charts.live_charts import gap_evolution_chart, pace_trace_chart, stint_gantt
+from data.f1_signalr import recorder_status
 from data.live import (
     build_live_grid,
     feed_status,
@@ -276,6 +277,20 @@ if live_now and drivers.empty:
         f"- Outcome: `{_outcome}`\n"
         f"- Detail: {_diag.get('detail') or '—'}\n\n"
         + _hints.get(_outcome, "Unrecognised outcome — check logs.")
+    )
+    # Ground-truth recorder state, so a stuck "warming up" is diagnosable: a
+    # connected websocket with file_bytes stuck at 0 means F1 accepted the
+    # connection but no frames are arriving (the signature of the host blocking
+    # / dropping the WebSocket); a non-alive thread or last_error means the
+    # connection itself failed.
+    _rec = recorder_status(session_key)
+    st.caption(
+        "Recorder — "
+        f"thread alive: `{_rec['thread_alive']}` · "
+        f"ws connected: `{_rec['ws_connected']}` · "
+        f"file: `{_rec['file_bytes']}` bytes"
+        + (f" · age `{_rec['file_age_s']}`s" if _rec["file_age_s"] is not None else "")
+        + (f" · ⚠️ `{_rec['last_error']}`" if _rec["last_error"] else "")
     )
 
 current_lap = int(laps["lap_number"].max()) if not laps.empty else 0

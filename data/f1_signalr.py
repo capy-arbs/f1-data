@@ -105,6 +105,7 @@ class _Recorder:
     def __init__(self, session_key: str, filepath: str):
         self.session_key = session_key
         self.filepath = filepath
+        self.last_error: str | None = None
         self._client = FreeSignalRClient(
             filename=filepath, filemode="w", timeout=_IDLE_TIMEOUT_S
         )
@@ -118,12 +119,17 @@ class _Recorder:
     def _run(self):
         try:
             self._client.start()
-        except Exception:
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
             logger.exception("SignalR recorder for %s crashed", self.session_key)
 
     @property
     def alive(self) -> bool:
         return self._thread.is_alive()
+
+    @property
+    def connected(self) -> bool:
+        return bool(getattr(self._client, "_is_connected", False))
 
 
 # -- Recorder lifecycle ----------------------------------------------------
@@ -156,6 +162,32 @@ def ensure_recording(session_key: str) -> str:
 def is_recording(session_key: str) -> bool:
     rec = _RECORDERS.get(session_key)
     return rec is not None and rec.alive
+
+
+def recorder_status(session_key: str) -> dict:
+    """Snapshot of the recorder + recording file for live diagnostics.
+
+    Lets the page distinguish the failure modes that all otherwise look like
+    an empty grid: thread never started, websocket connected but no bytes
+    arrived (the Cloud-blocked-WSS signature), file growing normally, or the
+    thread crashed with an error.
+    """
+    rec = _RECORDERS.get(session_key)
+    path = _recording_path(session_key)
+    exists = os.path.exists(path)
+    try:
+        size = os.path.getsize(path) if exists else 0
+        age = (_time.time() - os.path.getmtime(path)) if exists else None
+    except OSError:
+        size, age = 0, None
+    return {
+        "thread_alive": rec is not None and rec.alive,
+        "ws_connected": rec is not None and rec.connected,
+        "file_exists": exists,
+        "file_bytes": size,
+        "file_age_s": round(age, 1) if age is not None else None,
+        "last_error": rec.last_error if rec is not None else None,
+    }
 
 
 # -- Reading the recorded feed ---------------------------------------------
