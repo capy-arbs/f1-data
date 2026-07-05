@@ -219,7 +219,10 @@ else:
 drivers = get_drivers(session_key)
 intervals = get_intervals(session_key)
 positions = get_position(session_key)
-classification = get_classification(session_key)
+# Retirement/DNF classification is a race concept. In practice and qualifying a
+# car sitting in its pit box between runs is flagged Stopped/Retired by the feed,
+# which would mark the whole grid DNF — so only classify race sessions.
+classification = get_classification(session_key) if _is_race_session(sess) else pd.DataFrame()
 laps = get_laps(session_key)
 stints = get_stints(session_key)
 weather = get_weather(session_key)
