@@ -35,6 +35,11 @@ The What-If and Sprint Analysis pages are worked examples of this: the What-If s
 
 Wins/podiums/poles stay main-race-only by F1 convention (sprint wins are tracked separately).
 
+### Circuit Explorer stats come from a complete winners archive
+The `races`/`results` tables hold only the seasons the user has loaded (a few, typically), and `races` includes current-season races that haven't run yet — so deriving "races held / first race / most wins" from them silently reports the loaded slice as all-time (hit 2026-07-07: Spa showed 11 races, Verstappen top winner instead of 58 races, Schumacher 6). Circuit stats instead read `circuit_race_winners`: winner-only rows for **every** championship race 1950–today (one Jolpica page per season via `fetch_race_winners`, backfilled by `data/loader.py::load_all_race_winners` — button on Load Data — and kept fresh for the current year by `load_season`). Denormalized names, no FK rows forced for unloaded seasons; completed races only, so counts never include future rounds. The Current/Past scope split on the page uses `on_current_calendar` (circuit is on this season's calendar in `races`), NOT `last_race == latest season` — mid-season, a circuit whose race hasn't run yet has `last_race` = last year.
+
+Pre-championship history (Spa's first GP was 1925, not 1950) isn't in Ergast/Jolpica at all. `data/circuit_facts.py::FIRST_GRAND_PRIX` is a Wikipedia-curated static dict (circuit_id → (year, note)) shown as the "First Grand Prix" metric when it predates the first F1 race. Static history — never needs refreshing; only add entries for new circuits with pre-F1 GP pasts.
+
 ### Pit-stop durations come in two formats
 - Normal: `"22.630"` (seconds as string)
 - Long incidents: `"M:SS.mmm"` like `"18:01.553"` (red flag, repair, etc.)

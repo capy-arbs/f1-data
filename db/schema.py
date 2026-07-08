@@ -128,6 +128,22 @@ CREATE TABLE IF NOT EXISTS constructor_standings (
     UNIQUE(season, round, constructor_id)
 );
 
+-- Winner-only rows for every championship race 1950–today, kept complete
+-- independently of which full seasons are loaded. Denormalized (names, not
+-- foreign keys) so it never forces drivers/constructors rows for seasons we
+-- haven't loaded. Sole consumer: Circuit Explorer all-time stats.
+CREATE TABLE IF NOT EXISTS circuit_race_winners (
+    season INTEGER NOT NULL,
+    round INTEGER NOT NULL,
+    circuit_id TEXT NOT NULL,
+    race_name TEXT NOT NULL,
+    date TEXT,
+    winner_name TEXT,
+    winner_id TEXT,
+    constructor_name TEXT,
+    PRIMARY KEY (season, round)
+);
+
 CREATE TABLE IF NOT EXISTS fetch_log (
     endpoint TEXT NOT NULL,
     season INTEGER,
@@ -146,6 +162,7 @@ CREATE INDEX IF NOT EXISTS idx_constructor_standings_season ON constructor_stand
 CREATE INDEX IF NOT EXISTS idx_pit_stops_race ON pit_stops(race_id);
 CREATE INDEX IF NOT EXISTS idx_qualifying_race ON qualifying(race_id);
 CREATE INDEX IF NOT EXISTS idx_sprint_results_race ON sprint_results(race_id);
+CREATE INDEX IF NOT EXISTS idx_circuit_race_winners_circuit ON circuit_race_winners(circuit_id);
 """
 
 

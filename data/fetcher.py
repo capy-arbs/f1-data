@@ -67,6 +67,11 @@ def fetch_sprint_results(year: int) -> list[dict]:
     return _get(f"{year}/sprint", limit=1000)
 
 
+def fetch_race_winners(year: int) -> list[dict]:
+    """Fetch only the winning result for every race of a season (one page)."""
+    return _get(f"{year}/results/1", limit=100)
+
+
 def fetch_pit_stops(year: int, round_num: int) -> list[dict]:
     return _get(f"{year}/{round_num}/pitstops", limit=100)
 

@@ -4,7 +4,7 @@ from datetime import datetime
 
 import streamlit as st
 
-from data.loader import load_season, load_seasons
+from data.loader import load_all_race_winners, load_season, load_seasons
 from db.connection import get_db
 from db.schema import init_db
 
@@ -85,6 +85,28 @@ if needed and st.button("Load Selected Seasons", type="primary", use_container_w
     progress.progress(1.0, text="Done!")
     st.success(f"Loaded {len(needed)} season(s) successfully!")
     st.balloons()
+
+# Circuit winners archive — winner-only rows for every season, powering the
+# Circuit Explorer's all-time stats. Separate from full-season loads: it's one
+# API page per season, so the whole 1950–today backfill takes ~2 minutes.
+st.divider()
+st.subheader("Circuit Winners Archive")
+with get_db() as conn:
+    winner_seasons = conn.execute(
+        "SELECT COUNT(DISTINCT season) FROM circuit_race_winners"
+    ).fetchone()[0]
+st.caption(
+    f"All-time race winners per circuit (Circuit Explorer stats): "
+    f"{winner_seasons} of {current_year - 1949} seasons."
+)
+if st.button("Backfill All Seasons (1950–Now)", use_container_width=True):
+    progress = st.progress(0, text="Starting winners backfill...")
+    with get_db() as conn:
+        load_all_race_winners(
+            conn, progress_callback=lambda msg, pct: progress.progress(pct, text=msg)
+        )
+    progress.progress(1.0, text="Done!")
+    st.success("Circuit winners archive is complete.")
 
 # Show what's loaded
 st.divider()

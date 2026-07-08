@@ -4,11 +4,11 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from config import PLOTLY_TEMPLATE
+from data.circuit_facts import FIRST_GRAND_PRIX
 from data.track_geojson import get_track_outline
 from db.connection import get_db
 from db.schema import init_db
 from queries.circuits import get_all_circuits, get_circuit_history
-from queries.standings import get_available_seasons
 
 init_db()
 
@@ -19,21 +19,16 @@ if circuits.empty:
     st.warning("No circuit data loaded. Head to **Load Data** first.")
     st.stop()
 
-# Only show circuits that have hosted races.
-active = circuits[circuits["race_count"] > 0].copy()
+# Circuits that have hosted a race, plus new ones on this season's calendar
+# whose race hasn't run yet (they'd have race_count 0).
+active = circuits[(circuits["race_count"] > 0) | (circuits["on_current_calendar"] == 1)].copy()
 if active.empty:
     st.warning("No race data found for any circuits.")
     st.stop()
 
-# Split into Current vs Past based on the most-recent loaded season.
-seasons = get_available_seasons()
-latest_season = max(seasons) if seasons else None
-if latest_season is not None:
-    current = active[active["last_race"] == latest_season].sort_values("name")
-    past = active[active["last_race"] != latest_season].sort_values("name")
-else:
-    current = active.iloc[0:0]
-    past = active.sort_values("name")
+# Current = on this season's calendar (even before its race runs); Past = the rest.
+current = active[active["on_current_calendar"] == 1].sort_values("name")
+past = active[active["on_current_calendar"] != 1].sort_values("name")
 
 
 # -- Filter: Current vs Past + circuit picker -----------------------------
@@ -64,10 +59,19 @@ circuit = pool.loc[idx]
 st.subheader(circuit["name"])
 st.caption(f"{circuit['locality']}, {circuit['country']}")
 
-col1, col2, col3 = st.columns(3)
-col1.metric("Races Held", int(circuit["race_count"]))
-col2.metric("First Race", int(circuit["first_race"]) if circuit["first_race"] else "N/A")
-col3.metric("Latest Race", int(circuit["last_race"]) if circuit["last_race"] else "N/A")
+# F1-championship stats come from the complete winners archive; the "First
+# Grand Prix" metric adds the circuit's pre-championship history (e.g. Spa
+# 1925) from the Wikipedia-curated facts, when it predates the F1 era.
+fact = FIRST_GRAND_PRIX.get(circuit["circuit_id"])
+if fact:
+    col1, col_gp, col2, col3 = st.columns(4)
+    col_gp.metric("First Grand Prix", fact[0], help=fact[1])
+else:
+    col1, col2, col3 = st.columns(3)
+col1.metric("F1 Races Held", int(circuit["race_count"]),
+            help="World Championship races at this circuit, 1950–today")
+col2.metric("First F1 Race", int(circuit["first_race"]) if circuit["first_race"] else "N/A")
+col3.metric("Latest F1 Race", int(circuit["last_race"]) if circuit["last_race"] else "N/A")
 
 
 # -- Track outline view --------------------------------------------------

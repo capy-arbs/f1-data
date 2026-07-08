@@ -10,6 +10,7 @@ from data.fetcher import (
     fetch_driver_standings_for_round,
     fetch_pit_stops,
     fetch_qualifying,
+    fetch_race_winners,
     fetch_races,
     fetch_results,
     fetch_seasons,
@@ -260,6 +261,57 @@ def load_sprint_results(conn, year: int):
     time.sleep(API_RATE_LIMIT_DELAY)
 
 
+def load_race_winners(conn, year: int):
+    """Load winner-only rows for a season into circuit_race_winners.
+
+    This table is kept complete across ALL seasons (see load_all_race_winners)
+    so the Circuit Explorer's all-time stats stay correct even when only a few
+    full seasons are loaded. INSERT OR REPLACE because post-race steward
+    decisions can retroactively change a winner.
+    """
+    if _already_fetched(conn, "race_winners", year):
+        return
+    races = fetch_race_winners(year)
+    for r in races:
+        results = r.get("Results", [])
+        if not results:
+            continue
+        _upsert_circuit(conn, r["Circuit"])
+        res = results[0]
+        drv = res["Driver"]
+        conn.execute(
+            "INSERT OR REPLACE INTO circuit_race_winners "
+            "(season, round, circuit_id, race_name, date, winner_name, winner_id, "
+            "constructor_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                int(r["season"]),
+                int(r["round"]),
+                r["Circuit"]["circuitId"],
+                r["raceName"],
+                r.get("date"),
+                f"{drv['givenName']} {drv['familyName']}",
+                drv["driverId"],
+                res["Constructor"]["name"],
+            ),
+        )
+    _log_fetch(conn, "race_winners", year, 0, len(races))
+    conn.commit()
+    time.sleep(API_RATE_LIMIT_DELAY)
+
+
+def load_all_race_winners(conn, progress_callback=None):
+    """Backfill circuit_race_winners for every championship season (1950–today).
+
+    One API page per season; seasons already fetched are skipped via fetch_log
+    (the current year re-fetches after 24h like everything else).
+    """
+    years = list(range(1950, datetime.now(UTC).year + 1))
+    for i, year in enumerate(years):
+        if progress_callback:
+            progress_callback(f"{year}: Loading race winners...", (i + 1) / len(years))
+        load_race_winners(conn, year)
+
+
 def _parse_pit_duration(text) -> float | None:
     """Convert a pit-stop duration string into seconds.
 
@@ -447,6 +499,7 @@ def load_season(conn, year: int, progress_callback=None):
         ("Results", lambda: load_results(conn, year)),
         ("Qualifying", lambda: load_qualifying(conn, year)),
         ("Sprint Results", lambda: load_sprint_results(conn, year)),
+        ("Race Winners", lambda: load_race_winners(conn, year)),
         ("Driver Standings", lambda: load_driver_standings(conn, year)),
         ("Constructor Standings", lambda: load_constructor_standings(conn, year)),
     ]

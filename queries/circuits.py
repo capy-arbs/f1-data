@@ -6,15 +6,28 @@ from db.connection import get_db
 
 
 def get_all_circuits() -> pd.DataFrame:
+    """All circuits with all-time championship stats.
+
+    Stats come from circuit_race_winners (complete 1950–today, completed races
+    only) rather than the races table, which holds only the loaded seasons —
+    and, for the current season, includes races that haven't run yet.
+    on_current_calendar still comes from races: a circuit belongs to "Current"
+    from the moment it's on this season's calendar, even before its race runs.
+    """
     with get_db() as conn:
         rows = conn.execute(
             """
             SELECT c.circuit_id, c.name, c.locality, c.country, c.lat, c.lng,
-                   COUNT(r.race_id) as race_count,
-                   MIN(r.season) as first_race,
-                   MAX(r.season) as last_race
+                   COUNT(w.season) as race_count,
+                   MIN(w.season) as first_race,
+                   MAX(w.season) as last_race,
+                   EXISTS(
+                       SELECT 1 FROM races r
+                       WHERE r.circuit_id = c.circuit_id
+                         AND r.season = (SELECT MAX(season) FROM races)
+                   ) as on_current_calendar
             FROM circuits c
-            LEFT JOIN races r ON c.circuit_id = r.circuit_id
+            LEFT JOIN circuit_race_winners w ON c.circuit_id = w.circuit_id
             GROUP BY c.circuit_id
             ORDER BY race_count DESC
             """
@@ -26,16 +39,12 @@ def get_circuit_history(circuit_id: str) -> pd.DataFrame:
     with get_db() as conn:
         rows = conn.execute(
             """
-            SELECT r.season, r.round, r.race_name, r.date,
-                   d.given_name || ' ' || d.family_name as winner,
-                   d.code as winner_code,
-                   c.name as constructor
-            FROM races r
-            LEFT JOIN results res ON r.race_id = res.race_id AND res.position = 1
-            LEFT JOIN drivers d ON res.driver_id = d.driver_id
-            LEFT JOIN constructors c ON res.constructor_id = c.constructor_id
-            WHERE r.circuit_id = ?
-            ORDER BY r.season DESC
+            SELECT season, round, race_name, date,
+                   winner_name as winner,
+                   constructor_name as constructor
+            FROM circuit_race_winners
+            WHERE circuit_id = ?
+            ORDER BY season DESC
             """,
             (circuit_id,),
         ).fetchall()
