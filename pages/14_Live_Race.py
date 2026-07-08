@@ -267,9 +267,9 @@ if live_now and drivers.empty:
             "The SignalR recorder has connected and is pulling the live feed — "
             "the first data lands within a few seconds, so this should clear on "
             "the next refresh. If it persists for more than ~30s, the recorder "
-            "connected but isn't receiving (a known Streamlit Cloud quirk after "
-            "the app sleeps): hit **Refresh now**, and if that doesn't help, "
-            "reboot the app from share.streamlit.io → Manage app → Reboot."
+            "connected but isn't receiving: hit **Refresh now**, and if that "
+            "doesn't help, restart the recorder (`systemctl restart f1-dashboard` "
+            "on the host)."
         ),
     }
     # "warming_up" is an expected transient, not a failure — keep it calm.

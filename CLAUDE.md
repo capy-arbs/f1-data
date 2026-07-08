@@ -3,7 +3,7 @@
 ## What This Is
 An F1 dashboard combining a complete historical archive (1950–today) with live race-weekend timing data from the official F1 feed. Marquee feature is **Time-to-Strike** — a live predictor that estimates how many laps until a chasing driver catches the car ahead, based on real-time gaps and recent pace differential.
 
-Live at https://box-box.streamlit.app. Personal project, public repo, free Streamlit Community Cloud deploy.
+Live at https://boxbox.playastrova.com — self-hosted on a Raspberry Pi behind a Cloudflare Tunnel (see Hosting & Deploy). Personal project, public repo. Was on Streamlit Community Cloud until 2026-07-08; moved off because Cloud blocks the outbound WebSocket the live SignalR feed needs.
 
 ## Architecture
 - **Streamlit** multi-page app via `st.navigation` (custom sidebar with collapsible groups, see `app.py`)
@@ -131,20 +131,25 @@ Pitwall — broadcast-style dark. F1 red (#E10600) on near-black (#0A0B0F).
 Page titles get an automatic red underline via the `h1` CSS rule. Section subheaders are uppercased small caps. Metric values render in monospace for that timing-board feel.
 
 ## Hosting & Deploy
-- **Streamlit Community Cloud** at https://box-box.streamlit.app — auto-redeploys ~30s after any push to `main`.
-- **Single branch** workflow: `git push` deploys.
-- **Public repo** on GitHub (free-tier Streamlit Cloud requirement).
-- **Database is committed** (`f1_data.db`, ~544KB) so deploys ship with full historical data immediately.
+Self-hosted on the **astrova Raspberry Pi** (Pi 4, 8GB) behind the game's existing **Cloudflare Tunnel**, public at **https://boxbox.playastrova.com**. Moved off Streamlit Community Cloud on 2026-07-08 because Cloud blocks the outbound SignalR WebSocket (live feature was local-only there). Operational details:
+- **SSH:** `ssh root@astrova-pi` over the tailnet (Tailscale SSH; the ACL blocks the `capybearhug` user — use root). The app runs as user `f1dash` from `/opt/f1-dashboard` (venv `.venv`); git/venv ops via `runuser -u f1dash -- …`.
+- **App service:** `systemd` unit `f1-dashboard.service` runs `streamlit run app.py` on `0.0.0.0:8501`, capped `CPUQuota=200%` + `MemoryMax=1500M` so the co-located astrova game always wins. Unit files + runbook committed in `deploy/` (`deploy/pi-setup.md`).
+- **Public URL:** a 2nd ingress rule (`boxbox.playastrova.com → localhost:8501`) on the game's tunnel `astrova-mp` (`/home/astrova/.cloudflared/config.yml`, runs as user `astrova`). One `cloudflared`, two hostnames, $0.
+- **Deploy on push:** `f1-dashboard-update.timer` pulls `main` every ~30 min and, only if HEAD moved, pip-installs + restarts the app (f1dash restarts it via a narrow sudoers rule). So `git push` still ≈ deploys, just on a ≤30-min lag instead of instant. Private admin view over the tailnet: `http://astrova-pi:8501`.
+- **Single branch** workflow: push to `main`.
+- **Public repo** on GitHub.
+- **Database is committed** (`f1_data.db`, ~1.1MB) so a fresh clone ships with full historical data immediately.
+- **Streamlit Cloud is retired** — don't expect a `*.streamlit.app` deploy. `.streamlit/config.toml` (theme) and the `streamlit` dep still matter; the Cloud platform doesn't.
 
 ### Auto-refresh action
-`.github/workflows/refresh-data.yml` runs Mondays + Wednesdays at **06:13 UTC** (deliberately off the hour — top-of-the-hour cron times collide with GitHub's shared-runner pool and frequently fail with "could not acquire runner" or get delayed 30-90 minutes). Calls `load_season(conn, current_year)`, commits any DB changes as `f1-data-refresh-bot`, pushes — which triggers a Streamlit Cloud redeploy. Manually triggerable from the Actions tab.
+`.github/workflows/refresh-data.yml` runs Mondays + Wednesdays at **06:13 UTC** (deliberately off the hour — top-of-the-hour cron times collide with GitHub's shared-runner pool and frequently fail with "could not acquire runner" or get delayed 30-90 minutes). Calls `load_season(conn, current_year)`, commits any DB changes as `f1-data-refresh-bot`, pushes to `main` — which the Pi's `f1-dashboard-update.timer` pulls within ~30 min. Manually triggerable from the Actions tab.
 
 The Mon refresh catches Sunday race results once they've settled. The Wed refresh catches mid-week steward decisions, DSQs, post-race penalty changes that retroactively shift positions.
 
 The Live Race page shows a stale-data warning if the most-recent race in the DB is more than 14 days old.
 
-### Stale-deploy ImportError pattern
-If a page suddenly fails on the cloud with `ImportError` (message redacted) but imports cleanly locally and `git log origin/main..main` is empty, the most likely cause is that Streamlit Cloud cached a partial deploy — new page code referencing a name that the *old* helper module didn't have. **Reboot the app from share.streamlit.io → Manage app → Reboot** before debugging code. This usually clears it. Hit on 2026-05-06 right after the QA-pass commit added `get_latest_constructor` to both H2H pages and `queries/drivers.py` in the same commit; only the page side was loaded, so the import blew up.
+### Stale-deploy ImportError pattern (historical — Streamlit Cloud only)
+No longer applies now that we self-host: on Streamlit Cloud a page could fail on the cloud with `ImportError` while importing cleanly locally, because Cloud cached a partial deploy (new page code referencing a name the *old* helper module lacked); the fix was rebooting from share.streamlit.io. On the Pi, `f1-dashboard-update.timer` git-pulls a whole commit atomically and restarts the process, so there's no partial-deploy state. If the app misbehaves after an update, check `journalctl -u f1-dashboard` and `systemctl restart f1-dashboard`.
 
 ## Page → File Map
 The sidebar labels and page titles don't always match the file names because we've renamed pages without renumbering the files:

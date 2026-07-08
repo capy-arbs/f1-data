@@ -5,20 +5,21 @@ Interactive Formula 1 dashboard that combines a complete historical archive (195
 
 ## Product Name
 Box-Box
-Live URL: https://box-box.streamlit.app
+Live URL: https://boxbox.playastrova.com
 GitHub: https://github.com/capy-arbs/f1-data
-Branch: `main` (single branch — every push redeploys to production)
+Branch: `main` (single branch — the Pi's update timer pulls every ~30 min)
 
 ## Hosting / Infrastructure
-- **Streamlit Community Cloud** — free tier. Auto-redeploys within ~30 seconds of any push to `main`.
-- **GitHub Actions** — `.github/workflows/refresh-data.yml` runs Mondays + Wednesdays at 06:00 UTC, refreshes the current season's data via Jolpica, and pushes the updated `f1_data.db` back to the repo. Manually triggerable from the Actions tab.
-- **No backend / no auth** — Streamlit Cloud handles everything. App is public, listed as searchable on the platform.
-- **No domain** — using the default `*.streamlit.app` subdomain (free).
+Self-hosted since 2026-07-08 (moved off Streamlit Community Cloud — Cloud blocks the outbound SignalR WebSocket the live feed needs; see Known Issues). Full runbook: `deploy/pi-setup.md`.
+- **Host** — astrova Raspberry Pi (Pi 4, 8GB, Debian 13, aarch64). `ssh root@astrova-pi` over the tailnet (Tailscale SSH; ACL blocks the `capybearhug` user). App runs as user `f1dash` from `/opt/f1-dashboard`.
+- **App service** — `systemd` unit `f1-dashboard.service` (`streamlit run app.py` on `0.0.0.0:8501`), capped `CPUQuota=200%` + `MemoryMax=1500M` so the co-located astrova game always wins.
+- **Public URL** — a 2nd ingress rule on the game's existing Cloudflare Tunnel `astrova-mp` routes `boxbox.playastrova.com → localhost:8501`. One `cloudflared`, two hostnames, $0. No open inbound ports; the tunnel is the only public path.
+- **Deploy on push** — `f1-dashboard-update.timer` pulls `main` every ~30 min and restarts on change (f1dash restarts via a narrow sudoers rule). Private admin view over tailnet: `http://astrova-pi:8501`.
+- **GitHub Actions** — `.github/workflows/refresh-data.yml` runs Mon + Wed 06:13 UTC, refreshes the season via Jolpica, pushes the updated `f1_data.db`; the Pi's timer pulls it. Manually triggerable.
 
 ## Live URLs / Resources
-- App: https://box-box.streamlit.app
+- App: https://boxbox.playastrova.com
 - Repo: https://github.com/capy-arbs/f1-data
-- Streamlit Cloud admin: https://share.streamlit.io
 - Auto-refresh action: https://github.com/capy-arbs/f1-data/actions/workflows/refresh-data.yml
 
 ## Useful Commands
@@ -223,7 +224,7 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
 - [x] OpenF1 wrapper with per-endpoint caching
 - [x] All 18 dashboard pages
 - [x] Time-to-Strike predictor (formula + confidence model + UI)
-- [x] Streamlit Community Cloud deploy at box-box.streamlit.app
+- [x] Self-hosted deploy at boxbox.playastrova.com (Pi + Cloudflare Tunnel; was Streamlit Cloud until 2026-07-08)
 - [x] GitHub Actions auto-refresh (Mon/Wed)
 - [x] Pitwall theme + custom collapsible sidebar
 - [x] Track outlines via bacinger/f1-circuits
@@ -275,23 +276,11 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
 - [ ] Speed trap mini-leaderboard — top 5 by `i1_speed`/`st_speed` from the laps payload
 
 ## Known Issues / To Fix
-- **⚠️ CONFIRMED (2026-07-05): live SignalR feed cannot work on Streamlit Cloud — Cloud blocks the outbound WebSocket.** The decisive diagnostic finally came in during a live session on 2026-07-05: the `Recorder —` line read **`thread alive: True · ws connected: False · file: 0 bytes`** with no `last_error`. So the handshake **never completes** — `_is_connected` never flips and the recorder thread sits in its connect-wait loop indefinitely. This **corrects the 2026-06-28 hypothesis** (which guessed Cloud let the handshake through and only dropped data frames, i.e. `ws connected: True`): the socket doesn't even open. Cloud blocks outbound WSS to `livetiming.formula1.com` at the network layer. On the same day the feed was verified streaming fine **locally** (~2 KB/s, all 22 drivers with live positions via a direct recorder probe), so it's purely a Cloud egress restriction, not F1-side or a code bug. **No app change can fix this.** Options: (a) **external always-on recorder** — a tiny worker (Fly.io / Railway / cheap VM / home box) that holds the WSS feed and pushes the recording to a store (S3 / a small HTTP endpoint / a committed file) the Streamlit app reads; (b) accept **local-only** live (`streamlit run app.py`) and let Cloud serve post-session + historical, which it does fine. Deferred pending a decision on which.
+- **✅ RESOLVED (2026-07-08): self-hosted on the astrova Pi behind Cloudflare Tunnel** — live at https://boxbox.playastrova.com. The Fly.io plan below was superseded by the cheaper same-architecture route (whole app on hardware we already own). See Hosting / Infrastructure above and `deploy/pi-setup.md`. **Remaining:** the live-session acceptance test (confirm `ws connected: True · file growing`) can only run during a live session — do it on Belgian GP FP1, Fri 2026-07-17. Egress precondition already verified: from the Pi, `livetiming.formula1.com` responds (signalrcore negotiate 405, TLS verifies) — the exact path Cloud blocked is open.
 
-  **→ ACTION PLAN (decided 2026-07-05, do before the next race): move the WHOLE app to Fly.io.** Research (deep-research run, 22 verified claims) ranked Fly.io top for a low-maintenance always-on host with first-class WebSockets + unrestricted egress; a $5–7/mo VPS (AWS Lightsail / DigitalOcean Droplet / Hetzner) is the bulletproof runner-up (a plain box under systemd has zero platform logic to second-guess a long-lived socket). Serverless (Cloud Run, Lambda, Vercel) ruled out — they fight the background thread. Steps:
-  1. **Bootstrap locally** (required — `fly launch` is the only way to create the app): install flyctl, `fly auth login`, then `fly launch` in the repo. It generates `fly.toml` + a `Dockerfile`. Ongoing deploys can stay local `fly deploy`, or wire a GitHub Action later with a `FLY_API_TOKEN` secret to keep the current push-to-main-deploys habit — not needed for v1.
-  2. **Dockerfile**: python:3.11-slim, `pip install -r requirements.txt`, run `streamlit run app.py --server.port 8080 --server.address 0.0.0.0 --server.headless true`. (Bind 0.0.0.0 + Fly's internal port or Streamlit is unreachable.)
-  3. **⚠️ The make-or-break `fly.toml` config — this is the exact failure we hit on Cloud.** New Fly apps default to scale-to-zero, and Fly judges "idle" by *inbound* request concurrency — so a machine holding only the *outbound* SignalR socket with no browser traffic could get stopped and kill the recorder. Pin it always-on:
-     ```toml
-     [http_service]
-       internal_port = 8080
-       auto_stop_machines = "off"
-       auto_start_machines = false
-       min_machines_running = 1
-     ```
-  4. **Streamlit inbound WS** (browser↔server) works over Fly's `http_service` with no extra config.
-  5. **FastF1 cache** is disk-backed (`$FASTF1_CACHE`, default `/tmp/fastf1_cache`) — ephemeral `/tmp` is fine (repopulates), or attach a small Fly volume if cold-starts feel slow. `f1_data.db` ships in the image (committed), so historical data is immediate. No F1TV token needed — the free-token path (`lambda: ""`) is unchanged.
-  6. **Deploy + acceptance test**: `fly deploy`, open the Fly URL, and during (or right before) a live session confirm the `Recorder —` line reads **`ws connected: True · file: <growing> bytes`** — that's the whole point; it's what Cloud couldn't do. Sizing ~1GB RAM (`shared-cpu-1x`) ≈ $6/mo.
-  7. **URL/DNS**: moving the whole app retires `box-box.streamlit.app` (or keep it as a stale mirror); new home is the Fly URL (or a custom domain via `fly certs`). The Mon/Wed GitHub refresh action still commits DB updates to `main` — keep it committing and have Fly redeploy on push (or repoint its trigger).
+  **Root cause (kept for the record) — why Cloud never worked:** CONFIRMED 2026-07-05 during a live session, the `Recorder —` line read **`thread alive: True · ws connected: False · file: 0 bytes`** with no `last_error`. The handshake **never completes** — `_is_connected` never flips and the recorder sits in its connect-wait loop. This corrected the 2026-06-28 hypothesis (that Cloud let the handshake through and only dropped frames): the socket doesn't even open. Streamlit Community Cloud blocks outbound WSS to `livetiming.formula1.com` at the network layer. The feed streamed fine locally the same day (~2 KB/s, all 22 drivers) — purely a Cloud egress restriction, not F1-side or a code bug. No app change could fix it; the fix was moving hosts. No F1TV token needed — the free-token path (`lambda: ""`) is unchanged.
+
+  **Prior plan (NOT taken — Fly.io):** a deep-research run ranked Fly.io top and a $5–7/mo VPS as runner-up. We went with the astrova Pi instead: $0, hardware on hand, and the game's existing Cloudflare Tunnel gave a public URL for one extra ingress line. Fly remains the fallback if the Pi is ever retired — `deploy/pi-setup.md` documents the portable systemd setup, and the same Docker-less approach maps onto a VPS.
 - **Track outline rotations** — orientations are geographically correct (North up) but don't match F1.com's stylized diagrams. Deferred — would need per-circuit rotation table.
 - **Track outline aspect at high latitudes** — Mercator squash. See above.
 - **Auto-refresh action** doesn't refresh `pit_stops` for new races. Pit stops are lazy-loaded by the Race Breakdown page on first visit per race (Jolpica returns them per round, not per season). Cold-start visitors hit a small delay.

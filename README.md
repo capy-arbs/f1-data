@@ -1,6 +1,6 @@
 # Box-Box — F1 Analytics Dashboard
 
-**Live: [box-box.streamlit.app](https://box-box.streamlit.app)**
+**Live: [boxbox.playastrova.com](https://boxbox.playastrova.com)**
 
 A Formula 1 dashboard combining a complete historical archive (1950–today) with a real-time timing feed during race weekends. The marquee feature is **Time-to-Strike**, a live predictor that estimates how many laps a chasing driver needs to close on the car ahead.
 
@@ -102,9 +102,9 @@ The repository ships with a populated `f1_data.db` (~544 KB) so the dashboard wo
 
 ## Deployment
 
-Hosted on [Streamlit Community Cloud](https://share.streamlit.io). Every push to `main` triggers a redeploy within ~30 seconds.
+Self-hosted on a Raspberry Pi and served publicly over a Cloudflare Tunnel — moved off Streamlit Community Cloud because Cloud blocks the outbound WebSocket the live SignalR feed needs (the live feature only works with open egress). The app runs as a resource-capped `systemd` service; a timer pulls `main` every ~30 minutes and restarts on change. Full runbook and unit files in [`deploy/`](deploy/pi-setup.md).
 
-A GitHub Action (`.github/workflows/refresh-data.yml`) runs Mondays and Wednesdays at 06:00 UTC, refreshes the current season's data, and pushes any DB changes back to `main` — which triggers another redeploy. The Mon run catches Sunday race results once they settle; the Wed run catches mid-week steward decisions and post-race penalty changes that retroactively shift positions.
+A GitHub Action (`.github/workflows/refresh-data.yml`) runs Mondays and Wednesdays at 06:00 UTC, refreshes the current season's data, and pushes any DB changes back to `main` — which the Pi's update timer then pulls. The Mon run catches Sunday race results once they settle; the Wed run catches mid-week steward decisions and post-race penalty changes that retroactively shift positions.
 
 The Live Race page surfaces a "data may be stale" warning if the most-recent race in the DB is more than 14 days old.
 
