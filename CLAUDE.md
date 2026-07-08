@@ -7,7 +7,7 @@ Live at https://boxbox.playastrova.com — self-hosted on a Raspberry Pi behind 
 
 ## Architecture
 - **Streamlit** multi-page app via `st.navigation` (custom sidebar with collapsible groups, see `app.py`)
-- **SQLite** (`f1_data.db`, ~544KB, committed in repo) for historical data
+- **SQLite** (`f1_data.db`, ~1.1MB, committed in repo) for historical data
 - **Jolpica API** for historical (`api.jolpi.ca/ergast/f1`)
 - **F1 Live Timing — three sources, in order of freshness:**
   1. **SignalR websocket** (`data/f1_signalr.py`) for a session that is *on track right now*. This is the genuinely-live feed (`wss://livetiming.formula1.com/signalrcore`) the broadcast graphics use. A process-singleton background thread records the stream to a local file; each Streamlit rerun replays that file. See the "Live data is SignalR, not static files" section below — this is a correction to the long-held (wrong) belief that the static `.jsonStream` poll was the live source.
@@ -219,7 +219,7 @@ The Time-to-Strike block rebuilds the selectbox `key` based on the clicked row i
 ## Verification
 - `streamlit run app.py` then click each section
 - For the Time-to-Strike feature: defaults to the latest FastF1-loaded session; will fall back to the most recent completed race when no live race is running, so the page is never empty
-- For sprint-point parity: Antonelli's 2026 total should be 100 (93 main + 7 sprint as of R4 Miami). DB has results through R4; R5 Canada will load at the next Mon/Wed auto-refresh.
+- For sprint-point parity: any driver's dashboard total for a season must equal their main-race points (`results.points`) **plus** sprint points (`sprint_results.points`) — the two live in separate tables. Cross-check a driver's dashboard total against the official F1 standings for whatever rounds are currently loaded; a mismatch means a sprint-UNION was missed somewhere. (The DB loads the current season progressively via the Mon/Wed refresh, so the exact round count moves through the year.)
 - For pit-stop outlier handling: Australia 2026 should show Stroll's stops 1, 2, 4 stacked, with stops 3 + Alonso's stop 2 listed in the annotation above the chart
 
 ## Don't

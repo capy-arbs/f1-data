@@ -77,7 +77,7 @@ pages/     Streamlit views — orchestrate queries + charts, handle UI state
 Two distinct data feeds live in `data/`:
 
 - **`data/fetcher.py` + `data/loader.py`** — pulls historical data from the Jolpica API into local SQLite. Loaded on first launch; refreshed by the GitHub Action.
-- **`data/live.py`** — wraps [FastF1](https://github.com/theOehrly/Fast-F1), which taps F1's own SignalR timing feed (same source the broadcast uses). Each public function is decorated with `@st.cache_data` and a TTL sized to how fast the underlying data changes (10 s for intervals, 30 s for stints, 600 s for the driver list, etc.). FastF1 has its own disk cache (`$FASTF1_CACHE`, default `/tmp/fastf1_cache`) so cache misses at the Streamlit layer hit FastF1's local cache, not the network. Switched from OpenF1 on 2026-05-23 after OpenF1 gated live-session data behind a paid tier.
+- **`data/live.py`** + **`data/f1_live_client.py`** + **`data/f1_signalr.py`** — the live-timing stack, three sources in order of freshness: a **SignalR websocket** (`f1_signalr.py`, a process-singleton background-thread recorder) for a session on track *right now*; F1's **static `.jsonStream` archive** for recently-completed sessions; and **FastF1** (`session.load()`) for older completed ones. `data/live.py` exposes cached fetchers (`@st.cache_data`, TTLs from 10 s for intervals to 600 s for the driver list); FastF1 keeps its own disk cache (`$FASTF1_CACHE`). (Evolution: OpenF1 → FastF1-only → static-archive → added the live SignalR feed once we found the static files aren't written *during* a live session.)
 
 The Time-to-Strike compute helpers live in `queries/strike.py` as a pure function returning a `StrikeResult` dataclass with verdict text, confidence label, and a `notes[]` list of factors. The Live Race page renders that dataclass; nothing in the math layer knows about Streamlit.
 
@@ -86,7 +86,7 @@ Track outlines come from the [bacinger/f1-circuits](https://github.com/bacinger/
 ## Data sources
 
 - **[Jolpica API](https://api.jolpi.ca/ergast/f1)** — historical F1 data, 1950 to present. Ergast successor with the same response shape.
-- **[FastF1](https://github.com/theOehrly/Fast-F1)** — Python library that pulls live timing from F1's own SignalR feed (the source the broadcast uses). Community-maintained, free.
+- **F1 live timing** (`livetiming.formula1.com`) — the SignalR websocket (the genuinely-live feed the broadcast uses) for on-track sessions, plus the static `.jsonStream` archive for completed ones. **[FastF1](https://github.com/theOehrly/Fast-F1)** (community-maintained, free) provides the older-session fallback and the `SignalRClient` we subclass for the live feed.
 - **[bacinger/f1-circuits](https://github.com/bacinger/f1-circuits)** — MIT-licensed GeoJSON track outlines.
 
 All three projects are unaffiliated with Formula 1.
@@ -98,7 +98,7 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The repository ships with a populated `f1_data.db` (~544 KB) so the dashboard works immediately on a fresh checkout. To rebuild from scratch (e.g. to pull a fresh season locally), open **Settings → Load Data** in the sidebar.
+The repository ships with a populated `f1_data.db` (~1.1 MB) so the dashboard works immediately on a fresh checkout. To rebuild from scratch (e.g. to pull a fresh season locally), open **Settings → Load Data** in the sidebar.
 
 ## Deployment
 
@@ -123,13 +123,15 @@ f1_data.db          SQLite (committed) — historical F1 data
 
 db/
   connection.py     SQLite context manager (WAL mode, foreign keys on)
-  schema.py         Schema (12 tables) and idempotent init
+  schema.py         Schema (13 tables) and idempotent init
 
 data/
   fetcher.py        Jolpica API calls with pagination
   loader.py         Fetch -> transform -> insert orchestration
   normalizer.py     Cross-era point system recalculation
-  live.py           FastF1 live-timing wrapper (cached per endpoint)
+  live.py           Live-timing fetchers (cached per endpoint)
+  f1_live_client.py Delta-replay parsers shared by the SignalR + static feeds
+  f1_signalr.py     Live SignalR websocket recorder (background thread)
   track_geojson.py  bacinger/f1-circuits track outline fetcher
 
 queries/
@@ -146,7 +148,7 @@ charts/
   comparison_charts.py H2H bars, cumulative wins, radar charts
   live_charts.py       Stint Gantt, pace trace, gap evolution
 
-pages/              14 Streamlit pages
+pages/              16 Streamlit pages
 ```
 
 ## License

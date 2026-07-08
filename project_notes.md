@@ -77,7 +77,7 @@ The Home/Live Race page shows a "data may be stale" warning if the most-recent r
 - **Python 3.10+** (3.11 in CI via `actions/setup-python@v5`)
 - **Streamlit 1.30+** (1.56 confirmed in dev) — multi-page app via `st.navigation`
 - **Plotly** — every chart, with a monkey-patched modebar so reset-axes is always visible
-- **SQLite** — local file `f1_data.db` (~544KB), shipped in the repo
+- **SQLite** — local file `f1_data.db` (~1.1MB), shipped in the repo
 - **Pandas** — DataFrame work everywhere
 - **Requests** — HTTP for both data feeds
 - **NumPy** — explicit dependency for `queries/strike.py`'s linear-fit pace solver
@@ -144,14 +144,14 @@ Sidebar groups (defined in app.py):
 app.py                         Entry point — page config, theme CSS, custom nav, plotly modebar patch
 config.py                      API URLs, team colors (incl. Audi/Cadillac for 2026), point systems
 requirements.txt               streamlit, plotly, requests, pandas, numpy
-f1_data.db                     SQLite (committed, ~544KB) — historical data 2015–present + 2026 ongoing
+f1_data.db                     SQLite (committed, ~1.1MB) — full seasons for the loaded years + all-time race winners 1950–2026
 
 .streamlit/config.toml         Pitwall theme palette (F1 red on near-black)
 .github/workflows/refresh-data.yml   Mon/Wed 06:00 UTC auto-refresh
 
 db/
   connection.py                SQLite context manager (WAL mode, foreign keys on)
-  schema.py                    Schema (12 tables) and idempotent init
+  schema.py                    Schema (13 tables) and idempotent init
 
 data/
   fetcher.py                   Jolpica API calls with pagination
@@ -178,7 +178,7 @@ views/
   driver_profile.py            Shared renderer for Driver Profiles + Historical Driver Profiles
   head_to_head.py              Shared renderer for Head-to-Head + Historical Head-to-Head
 
-pages/                         18 Streamlit pages (see Pages section)
+pages/                         16 Streamlit pages (see Pages section)
 ```
 
 ## Data Sources
@@ -192,7 +192,7 @@ pages/                         18 Streamlit pages (see Pages section)
 Both feeds are unaffiliated with Formula 1.
 
 ## Schema (SQLite)
-12 tables, defined in `db/schema.py`:
+13 tables, defined in `db/schema.py`:
 - `seasons`, `circuits`, `drivers`, `constructors` — reference tables
 - `races` — one row per race (season, round, circuit, date)
 - `results` — main-race finish per (race, driver), incl. fastest lap rank/time
@@ -200,6 +200,7 @@ Both feeds are unaffiliated with Formula 1.
 - `qualifying` — Q1/Q2/Q3 times per (race, driver)
 - `pit_stops` — per-stop (race, driver, stop number)
 - `driver_standings`, `constructor_standings` — championship standings per round
+- `circuit_race_winners` — winner-only rows for every championship race 1950–today (denormalized); powers the Circuit Explorer's all-time stats independently of which full seasons are loaded
 - `fetch_log` — when each endpoint was last fetched (drives 24h re-fetch on current year)
 
 ## Critical gotchas
@@ -222,7 +223,7 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
 - [x] SQLite schema + auto-init
 - [x] Jolpica API loader with pagination + idempotent inserts
 - [x] OpenF1 wrapper with per-endpoint caching
-- [x] All 18 dashboard pages
+- [x] All 16 dashboard pages
 - [x] Time-to-Strike predictor (formula + confidence model + UI)
 - [x] Self-hosted deploy at boxbox.playastrova.com (Pi + Cloudflare Tunnel; was Streamlit Cloud until 2026-07-08)
 - [x] GitHub Actions auto-refresh (Mon/Wed)
