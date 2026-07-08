@@ -1,0 +1,34 @@
+[Unit]
+Description=Box-Box F1 Dashboard (Streamlit)
+# Start after the network and (if co-located) the game server, so a shared-box
+# boot brings the game up first.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=f1dash
+WorkingDirectory=/opt/f1-dashboard
+# Disk-backed FastF1 cache under the repo dir so it survives restarts (faster
+# cold starts). f1_data.db ships committed in the repo, so historical data is
+# available immediately with no Load Data run.
+Environment=FASTF1_CACHE=/opt/f1-dashboard/.fastf1cache
+# Bind 0.0.0.0: the Cloudflare tunnel reaches it at localhost:8501 for the
+# public URL, and it's also viewable on the tailnet (http://astrova-pi:8501)
+# for private admin. The Pi has no open inbound internet ports — the only
+# public path is the tunnel.
+ExecStart=/opt/f1-dashboard/.venv/bin/streamlit run app.py \
+    --server.port 8501 \
+    --server.address 0.0.0.0 \
+    --server.headless true
+Restart=on-failure
+RestartSec=5
+
+# --- Resource caps: the game always wins on the shared Pi 4 (4 cores, 8GB) ---
+# 2 of 4 cores max, 1.5GB RAM max. Live-race load is light (SignalR recorder +
+# 10s reruns); the cap only bites on heavy historical FastF1 page loads.
+CPUQuota=200%
+MemoryMax=1500M
+
+[Install]
+WantedBy=multi-user.target

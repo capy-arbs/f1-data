@@ -1,0 +1,25 @@
+[Unit]
+Description=Box-Box: pull latest main and restart if changed
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=f1dash
+WorkingDirectory=/opt/f1-dashboard
+# Pull main; if the working tree moved, refresh deps (no-op when unchanged)
+# and restart the app. Replaces Streamlit Cloud's push-to-deploy: picks up the
+# Mon/Wed f1_data.db refresh commits and any code pushes to main.
+# Needs privilege to restart the app unit, granted narrowly via sudoers (see
+# pi-setup.md) so f1dash can run exactly this one systemctl command.
+ExecStart=/bin/bash -c '\
+  before=$(git rev-parse HEAD); \
+  git pull --ff-only origin main; \
+  after=$(git rev-parse HEAD); \
+  if [ "$before" != "$after" ]; then \
+    /opt/f1-dashboard/.venv/bin/pip install -r requirements.txt --only-binary=:all: -q; \
+    sudo /usr/bin/systemctl restart f1-dashboard.service; \
+  fi'
+
+[Install]
+WantedBy=multi-user.target

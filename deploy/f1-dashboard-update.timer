@@ -1,0 +1,14 @@
+[Unit]
+Description=Box-Box: check for updates every 30 minutes
+
+[Timer]
+# First run 5 min after boot, then every 30 min. Randomized delay avoids
+# hammering GitHub exactly on the half-hour. The Mon/Wed data refresh lands
+# within ~30 min; code pushes within ~30 min too.
+OnBootSec=5min
+OnUnitActiveSec=30min
+RandomizedDelaySec=90
+Persistent=true
+
+[Install]
+WantedBy=timers.target
