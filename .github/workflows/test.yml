@@ -1,0 +1,32 @@
+name: Tests
+
+# Runs the test suite and the ruff lint gate on every push and PR. Streamlit
+# Cloud auto-deploys whatever lands on main, so this is the only thing standing
+# between a broken commit and production — keep it green.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Test (pytest)
+        run: pytest
