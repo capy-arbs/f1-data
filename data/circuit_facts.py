@@ -14,8 +14,7 @@ championship F1 race are omitted — the DB already has that year.
 FIRST_GRAND_PRIX = {
     "albert_park": (1953, "1953 Australian Grand Prix (pre-championship); F1 era from 1996"),
     "bremgarten": (1934, "1934 Swiss Grand Prix (pre-championship)"),
-    "essarts": (1952, "1952 French Grand Prix (circuit opened 1950 with a sports-car GP)"),
-    "galvez": (1953, "1953 Argentine Grand Prix"),
+    "galvez": (1952, "1952 Buenos Aires Grand Prix (non-championship, Formula Libre); championship from 1953"),
     "imola": (1963, "1963 non-championship F1 race, won by Jim Clark; championship from 1980"),
     "indianapolis": (1911, "First Indianapolis 500; it counted toward the F1 championship 1950–1960"),
     "interlagos": (1972, "1972 Brazilian Grand Prix (non-championship); championship from 1973"),
@@ -23,10 +22,9 @@ FIRST_GRAND_PRIX = {
     "monza": (1922, "1922 Italian Grand Prix (pre-championship)"),
     "nurburgring": (1927, "1927 German Grand Prix (pre-championship)"),
     "pedralbes": (1946, "1946 Penya Rhin Grand Prix (pre-championship)"),
-    "red_bull_ring": (1970, "1970 Austrian Grand Prix, at the original Österreichring"),
     "reims": (1926, "1926 Grand Prix de la Marne (pre-championship)"),
     "rodriguez": (1962, "1962 Mexican Grand Prix (non-championship); championship from 1963"),
     "silverstone": (1948, "1948 British Grand Prix (pre-championship)"),
     "spa": (1925, "1925 Belgian Grand Prix (pre-championship)"),
-    "zandvoort": (1948, "1948 Prijs van Zandvoort, the Dutch GP's first edition; named a GP from 1949"),
+    "zandvoort": (1949, "1949 Grote Prijs van Zandvoort, the circuit's first race named a Grand Prix (the 1948 opener was the non-GP Prijs van Zandvoort); Dutch GP from 1950"),
 }
