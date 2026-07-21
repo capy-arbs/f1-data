@@ -65,12 +65,14 @@ systemctl restart astrova-tunnel        # ~5s tunnel blip — do it when nobody'
 ```
 (A dedicated Pi with its own tunnel: `cloudflared tunnel create`, `cloudflared tunnel route dns`, and a standalone `config.yml` + service — same shape, no co-tenant.)
 
-## 6. Live acceptance test
+## 6. Live acceptance test (PASSED 2026-07-19, Belgian GP race)
 During a live session, open the **Live Session** page and confirm the diagnostic reads:
 ```
 Recorder — thread alive: True · ws connected: True · file: <growing> bytes
 ```
 `ws connected: True` with a growing file is the whole point — it's what Cloud could never do. If it reads `ws connected: False`, the host is blocking egress (the Cloud failure mode).
+
+Passed on this Pi during the 2026-07-19 Belgian GP race: the recorder streamed the full race (~4.6MB, all 22 drivers) with Time-to-Strike running clean against the live data. One caveat found: a half-dead websocket (`ws connected: True` but file frozen) stalls the feed until the thread dies and revives (~9 min observed) — see project_notes.md → Known Issues (stall watchdog).
 
 ## Notes
 - No F1TV token needed — the free-token SignalR path (`lambda: ""` in `data/f1_signalr.py`) is unchanged.
