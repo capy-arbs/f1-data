@@ -38,7 +38,7 @@ from data.live import (
     live_diagnostics,
 )
 from db.schema import init_db
-from queries.strike import all_strike_pairs, compute_strike
+from queries.strike import all_strike_pairs, compute_strike, eta_summary
 
 # Cached fetchers cleared together on manual refresh and on each auto-refresh
 # tick so the TTLs are bypassed and the page pulls genuinely fresh data.
@@ -552,23 +552,26 @@ else:
 
         result = compute_strike(chaser_n, target_n, intervals, laps, stints, drivers, total_laps=total_laps)
 
-        # Big verdict card
+        # Big ETA card — the headline answer is "when do they meet?"
+        eta_head, eta_detail = eta_summary(result)
         verdict_col, conf_col = st.columns([3, 1])
         verdict_col.metric(
             label=f"{result.chaser} → {result.target}",
-            value=("—" if result.laps_to_catch is None else f"{result.laps_to_catch} laps"),
-            delta=result.verdict,
+            value=eta_head,
+            delta=eta_detail,
             delta_color="off",
         )
         conf_emoji = {"high": "🟢 high", "medium": "🟡 medium", "low": "🔴 low", "unknown": "⚪ unknown"}
         conf_col.markdown(f"**Confidence**\n\n{conf_emoji.get(result.confidence, result.confidence)}")
+        st.caption(result.verdict)
 
         # Numeric breakdown
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Gap", f"{result.gap_seconds:.3f}s" if result.gap_seconds is not None else "—")
-        m2.metric("Δ Pace", f"{result.pace_delta:+.2f}s/lap" if result.pace_delta is not None else "—")
-        m3.metric("Chaser pace", f"{result.chaser_pace:.3f}s" if result.chaser_pace else "—")
-        m4.metric("Target pace", f"{result.target_pace:.3f}s" if result.target_pace else "—")
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Meets on lap", result.on_lap if result.on_lap is not None else "—")
+        m2.metric("Gap", f"{result.gap_seconds:.3f}s" if result.gap_seconds is not None else "—")
+        m3.metric("Δ Pace", f"{result.pace_delta:+.2f}s/lap" if result.pace_delta is not None else "—")
+        m4.metric("Chaser pace", f"{result.chaser_pace:.3f}s" if result.chaser_pace else "—")
+        m5.metric("Target pace", f"{result.target_pace:.3f}s" if result.target_pace else "—")
 
         f = result.factors
 

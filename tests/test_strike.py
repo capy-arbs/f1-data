@@ -29,6 +29,7 @@ from queries.strike import (
     _laps_to_catch,
     _pace_and_deg,
     compute_strike,
+    eta_summary,
 )
 
 # -- Fixtures helpers -------------------------------------------------
@@ -241,3 +242,54 @@ def test_compute_strike_returns_cant_close_when_chaser_is_slower():
     assert isinstance(result, StrikeResult)
     assert result.laps_to_catch is None
     assert "can't close" in result.verdict.lower()
+
+
+# -- ETA summary ------------------------------------------------------
+
+def _result(**kw):
+    """StrikeResult with the fields eta_summary reads, defaulted to a catch."""
+    base = dict(
+        chaser="VER", target="NOR", gap_seconds=2.5,
+        chaser_pace=90.0, target_pace=91.0, pace_delta=1.0,
+        laps_to_catch=4, eta_seconds=360.0, on_lap=34,
+        laps_remaining=20,
+    )
+    base.update(kw)
+    return StrikeResult(**base)
+
+
+def test_eta_summary_headline_counts_laps():
+    head, detail = eta_summary(_result())
+    assert head == "ETA 4 laps"
+    assert "on lap 34" in detail
+    assert "6m 00s" in detail
+
+
+def test_eta_summary_next_lap_reads_naturally():
+    head, _ = eta_summary(_result(laps_to_catch=1, gap_seconds=2.5, on_lap=31))
+    assert head == "ETA next lap"
+
+
+def test_eta_summary_sub_second_gap_is_this_lap():
+    head, _ = eta_summary(_result(laps_to_catch=1, gap_seconds=0.4, on_lap=31))
+    assert head == "ETA this lap"
+
+
+def test_eta_summary_flags_a_catch_past_the_flag():
+    head, detail = eta_summary(_result(laps_to_catch=12, laps_remaining=8))
+    assert head == "Not before flag"
+    assert "needs 12" in detail and "only 8" in detail
+
+
+def test_eta_summary_falls_back_to_verdict_when_no_catch():
+    head, detail = eta_summary(
+        _result(laps_to_catch=None, eta_seconds=None, on_lap=None,
+                verdict="VER can't close on current pace")
+    )
+    assert head == "—"
+    assert detail == "VER can't close on current pace"
+
+
+def test_eta_summary_omits_missing_detail_parts():
+    _, detail = eta_summary(_result(eta_seconds=None))
+    assert detail == "on lap 34"

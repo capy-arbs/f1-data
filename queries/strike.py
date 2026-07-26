@@ -61,6 +61,45 @@ class StrikeResult:
         return asdict(self)
 
 
+# -- ETA formatting ---------------------------------------------------------
+
+def _fmt_clock(seconds: float) -> str:
+    total = int(round(seconds))
+    m, s = divmod(total, 60)
+    return f"{m}m {s:02d}s" if m else f"{s}s"
+
+
+def eta_summary(result: StrikeResult) -> tuple[str, str]:
+    """Plain-language ETA for a result: ``(headline, detail)``.
+
+    The headline is the at-a-glance answer the UI puts in the big slot
+    ("ETA 4 laps"); the detail says which lap that lands on and roughly how
+    long it is in wall-clock terms. When there's no catch to report, the
+    headline collapses to an em dash and the detail carries the reason.
+    """
+    if result.laps_to_catch is None:
+        return "—", result.verdict
+
+    k = result.laps_to_catch
+
+    if result.laps_remaining is not None and k > result.laps_remaining:
+        return "Not before flag", f"needs {k} laps, only {result.laps_remaining} left"
+
+    if k <= 1 and result.gap_seconds is not None and result.gap_seconds <= PROXIMITY_THRESHOLD_S:
+        headline = "ETA this lap"
+    elif k == 1:
+        headline = "ETA next lap"
+    else:
+        headline = f"ETA {k} laps"
+
+    detail = []
+    if result.on_lap is not None:
+        detail.append(f"on lap {result.on_lap}")
+    if result.eta_seconds is not None:
+        detail.append(f"~{_fmt_clock(result.eta_seconds)}")
+    return headline, " · ".join(detail)
+
+
 # -- Internal helpers -------------------------------------------------------
 
 def _clean_laps(laps_df: pd.DataFrame, driver_number: int, window: int = PACE_WINDOW) -> pd.DataFrame:
@@ -429,6 +468,8 @@ def all_strike_pairs(
         rows.append({
             "Chaser": res.chaser,
             "Target": res.target,
+            "ETA": eta_summary(res)[0],
+            "On Lap": res.on_lap,
             "Gap (s)": res.gap_seconds,
             "Δ Pace (s/lap)": res.pace_delta,
             "Laps to Catch": res.laps_to_catch,

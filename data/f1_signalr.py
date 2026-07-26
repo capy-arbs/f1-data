@@ -106,8 +106,14 @@ class _Recorder:
         self.session_key = session_key
         self.filepath = filepath
         self.last_error: str | None = None
+        # Append, don't truncate: recordings are keyed per session, so the only
+        # thing a "w" here can overwrite is earlier data from the *same* session.
+        # F1 resets the socket mid-race (8 times during the 2026 Hungarian GP),
+        # and every reconnect used to wipe the race history accumulated so far.
+        # Replaying a resumed file is safe — the reconnect snapshot is full-state
+        # and the parsers merge snapshot-then-delta in line order either way.
         self._client = FreeSignalRClient(
-            filename=filepath, filemode="w", timeout=_IDLE_TIMEOUT_S
+            filename=filepath, filemode="a", timeout=_IDLE_TIMEOUT_S
         )
         self._thread = threading.Thread(
             target=self._run, name=f"f1-signalr-{session_key}", daemon=True
