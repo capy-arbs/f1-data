@@ -565,13 +565,14 @@ else:
         conf_col.markdown(f"**Confidence**\n\n{conf_emoji.get(result.confidence, result.confidence)}")
         st.caption(result.verdict)
 
-        # Numeric breakdown
-        m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Meets on lap", result.on_lap if result.on_lap is not None else "—")
-        m2.metric("Gap", f"{result.gap_seconds:.3f}s" if result.gap_seconds is not None else "—")
-        m3.metric("Δ Pace", f"{result.pace_delta:+.2f}s/lap" if result.pace_delta is not None else "—")
-        m4.metric("Chaser pace", f"{result.chaser_pace:.3f}s" if result.chaser_pace else "—")
-        m5.metric("Target pace", f"{result.target_pace:.3f}s" if result.target_pace else "—")
+        # Numeric breakdown. Stays at four columns — a fifth squeezes the
+        # monospace values badly at wide layout, and the catch lap is already
+        # spelled out in the ETA detail line above.
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Gap", f"{result.gap_seconds:.3f}s" if result.gap_seconds is not None else "—")
+        m2.metric("Δ Pace", f"{result.pace_delta:+.2f}s/lap" if result.pace_delta is not None else "—")
+        m3.metric("Chaser pace", f"{result.chaser_pace:.3f}s" if result.chaser_pace else "—")
+        m4.metric("Target pace", f"{result.target_pace:.3f}s" if result.target_pace else "—")
 
         f = result.factors
 
