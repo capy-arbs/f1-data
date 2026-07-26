@@ -649,6 +649,22 @@ def get_weather(session_key) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
 
 
+def get_lap_count(session_key) -> tuple[int | None, int | None]:
+    """``(current_lap, total_laps)`` from the feed's ``LapCount`` topic.
+
+    The snapshot carries both (``{"CurrentLap": 67, "TotalLaps": 70}``) and
+    each subsequent delta ticks ``CurrentLap`` only, so merging snapshot over
+    deltas gives the live lap against the scheduled distance. Either value is
+    None when the topic hasn't arrived — practice and qualifying never send it.
+    """
+    entries = _fetch_stream(session_key, "LapCount.jsonStream")
+    if not entries:
+        return None, None
+
+    state = _build_state(entries)
+    return _safe_int(state.get("CurrentLap")), _safe_int(state.get("TotalLaps"))
+
+
 def get_race_control(session_key) -> pd.DataFrame:
     entries = _fetch_stream(session_key, "RaceControlMessages.jsonStream")
     empty = pd.DataFrame(columns=["date", "message", "flag", "category"])

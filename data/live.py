@@ -749,6 +749,47 @@ def get_race_control(session_key) -> pd.DataFrame:
     return df.sort_values("date", ascending=False).reset_index(drop=True)
 
 
+# -- Lap count -------------------------------------------------------------
+
+def _int_or_none(value) -> int | None:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def get_lap_count(session_key) -> tuple[int | None, int | None]:
+    """``(current_lap, total_laps)`` for a race or sprint.
+
+    Can't go through ``_try_live_client`` — that helper inspects ``.empty`` on
+    a DataFrame result. Practice and qualifying never send ``LapCount``, so
+    ``(None, None)`` is a normal answer, not a failure.
+    """
+    if _has_live_timing(session_key):
+        if _is_live_now(session_key):
+            _live_signalr.ensure_recording(session_key)
+        try:
+            current, total = _live_client.get_lap_count(session_key)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Live client get_lap_count failed", exc_info=True
+            )
+        else:
+            if total is not None:
+                return current, total
+
+    sess = _load_session(session_key)
+    total = _safe_attr(sess, "total_laps")
+    laps = _safe_attr(sess, "laps")
+    current = None
+    if laps is not None and not laps.empty and "LapNumber" in laps.columns:
+        current = _int_or_none(laps["LapNumber"].max())
+    return current, _int_or_none(total)
+
+
 # -- Team radio (placeholder — FastF1 doesn't expose this directly) -------
 
 @st.cache_data(ttl=20, show_spinner=False)

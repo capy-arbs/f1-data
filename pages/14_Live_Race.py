@@ -13,7 +13,6 @@ in other sessions for data inspection, but flags itself as non-race.
 
 from __future__ import annotations
 
-import re
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -28,6 +27,7 @@ from data.live import (
     get_classification,
     get_drivers,
     get_intervals,
+    get_lap_count,
     get_laps,
     get_latest_session,
     get_position,
@@ -44,7 +44,7 @@ from queries.strike import all_strike_pairs, compute_strike, eta_summary
 # tick so the TTLs are bypassed and the page pulls genuinely fresh data.
 _REFRESH_FNS = (
     get_intervals, get_position, get_classification, get_laps,
-    get_stints, get_weather, get_race_control,
+    get_stints, get_weather, get_race_control, get_lap_count,
 )
 
 
@@ -540,15 +540,11 @@ else:
         chaser_n = options[chaser_label]
         target_n = options[target_label]
 
-        # Total laps unknown for many sessions — try to read from race-control
-        # "LAP X/Y" if available, else None.
-        total_laps = None
-        if not rc.empty and "message" in rc.columns:
-            for msg in rc["message"].dropna().head(20):
-                m = re.search(r"\bLAP\s+\d+/(\d+)\b", str(msg).upper())
-                if m:
-                    total_laps = int(m.group(1))
-                    break
+        # Race distance comes from the feed's LapCount topic. The old approach
+        # scanned race control for "LAP X/Y", which never matched — F1 doesn't
+        # send that message, so total_laps stayed None all race and every
+        # "won't catch before the flag" check silently never fired.
+        _, total_laps = get_lap_count(session_key)
 
         result = compute_strike(chaser_n, target_n, intervals, laps, stints, drivers, total_laps=total_laps)
 

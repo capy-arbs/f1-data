@@ -130,3 +130,38 @@ class TestGetClassification:
         df = flc.get_classification("2026|Spain|R")
         assert df.empty
         assert list(df.columns) == ["driver_number", "position", "status", "retired"]
+
+
+# -- LapCount ---------------------------------------------------------
+
+class TestGetLapCount:
+    """Race distance drives the 'won't catch before the flag' verdict.
+
+    Shapes here are copied from a real 2026 Hungarian GP recording: the
+    snapshot carries CurrentLap + TotalLaps, deltas tick CurrentLap alone.
+    """
+
+    def _patch(self, monkeypatch, entries):
+        monkeypatch.setattr(
+            flc, "_fetch_stream", lambda key, topic: entries
+        )
+
+    def test_reads_current_and_total_from_snapshot(self, monkeypatch):
+        self._patch(monkeypatch, [("", {"CurrentLap": 67, "TotalLaps": 70, "_kf": True})])
+        assert flc.get_lap_count("k") == (67, 70)
+
+    def test_delta_advances_current_lap_keeping_total(self, monkeypatch):
+        self._patch(monkeypatch, [
+            ("", {"CurrentLap": 67, "TotalLaps": 70, "_kf": True}),
+            ("2026-07-26T14:39:04.997Z", {"CurrentLap": 68}),
+        ])
+        assert flc.get_lap_count("k") == (68, 70)
+
+    def test_no_entries_returns_none_pair(self, monkeypatch):
+        self._patch(monkeypatch, [])
+        assert flc.get_lap_count("k") == (None, None)
+
+    def test_missing_total_still_yields_current(self, monkeypatch):
+        # Practice/qualifying never send TotalLaps.
+        self._patch(monkeypatch, [("", {"CurrentLap": 12})])
+        assert flc.get_lap_count("k") == (12, None)
