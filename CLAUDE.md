@@ -6,25 +6,21 @@ An F1 dashboard combining a complete historical archive (1950–today) with live
 Live at https://boxbox.playastrova.com — self-hosted on a Raspberry Pi behind a Cloudflare Tunnel (see Hosting & Deploy). Personal project, public repo. Was on Streamlit Community Cloud until 2026-07-08; moved off because Cloud blocks the outbound WebSocket the live SignalR feed needs.
 
 ## Architecture
-- **Streamlit** multi-page app via `st.navigation` (custom sidebar with collapsible groups, see `app.py`)
-- **SQLite** (`f1_data.db`, ~1.1MB, committed in repo) for historical data
-- **Jolpica API** for historical (`api.jolpi.ca/ergast/f1`)
-- **F1 Live Timing — three sources, in order of freshness:**
-  1. **SignalR websocket** (`data/f1_signalr.py`) for a session that is *on track right now*. This is the genuinely-live feed (`wss://livetiming.formula1.com/signalrcore`) the broadcast graphics use. A process-singleton background thread records the stream to a local file; each Streamlit rerun replays that file. See the "Live data is SignalR, not static files" section below — this is a correction to the long-held (wrong) belief that the static `.jsonStream` poll was the live source.
-  2. **Static `.jsonStream` archive** (`data/f1_live_client.py`, REST polling of `livetiming.formula1.com/static/`) for *recently-completed* sessions. These files are written only **after** a session finishes archiving, so they're the post-session replay, not live.
-  3. **FastF1** (`session.load()`) for older completed sessions.
 
-  Both 1 and 2 funnel through `data/f1_live_client.py`'s parsers (the SignalR recording and the static `.jsonStream` files share the same delta-replay shaping — `_fetch_stream` reads the live recording when fresh, the static archive otherwise). Routing is automatic in `data/live.py` via `_has_live_timing()` (static-archive eligibility, 12h window) and `_is_live_now()` (strict on-track check that gates the SignalR recorder). Previously used OpenF1 (swapped 2026-05-23, paid tier), then FastF1-only (swapped 2026-05-24 because `session.load()` returns nothing during live races), then static-`.jsonStream`-only (which, we discovered 2026-06-26, *also* returns nothing live — those files don't exist until the session archives), then added the SignalR feed for true live data.
-- **bacinger/f1-circuits** GeoJSON for track outlines
+Layered: pages stay thin; `queries/` owns SQL, `charts/` owns figures, `data/` owns fetching
+and caching. **Inline SQL or chart-building inside a page is a smell — push it down a layer.**
+Directory listing and the data-source rundown are in `README.md`; the deployment picture is in
+`project_notes.md`.
 
-Layered code structure:
-- `data/` — fetch + persistence
-- `queries/` — pure SQL/compute helpers, no Streamlit
-- `charts/` — Plotly figure builders, take DataFrames return Figures
-- `views/` — shared page renderers used by more than one page (e.g. the current-grid + historical Driver Profiles / Head-to-Head pairs both call into one renderer here). When you find yourself copying a whole page to make a "historical" or "alternate-filter" variant, put the body in `views/` and let each page be a thin shim.
-- `pages/` — Streamlit pages. Pages should stay thin: `init_db()`, fetch the input set (e.g. drivers list), call into a `views/` renderer with title/caption/data. Inline SQL or chart-building inside a page is a smell — push it down a layer.
+**Three timing sources, and which one applies depends on when the session is:**
 
-The What-If and Sprint Analysis pages are worked examples of this: the What-If simulation transforms (`apply_driver_swap`, `apply_points_system`, `apply_overrides` cascade insertion, `standings_rank_changes`) live in `queries/what_if.py` with charts in `charts/what_if_charts.py`; sprint queries + the sprint-vs-race compute live in `queries/sprint.py` with charts in `charts/sprint_charts.py`. The pages just wire inputs → transform → render. The pure transforms are unit-tested (`tests/test_what_if.py`, `tests/test_sprint.py`) without a DB.
+1. **SignalR websocket** (`data/f1_signalr.py`) — a session that is *on track right now*. The only genuinely live path.
+2. **Static `.jsonStream` archive** (`data/f1_live_client.py`, REST polling) — a session that has finished but is not yet in FastF1.
+3. **FastF1** (`session.load()`) — older completed sessions.
+
+Sources 1 and 2 both funnel through `data/f1_live_client.py`'s parsers, so a parsing fix
+lands for both. Historical data comes from the committed SQLite DB; standings and results
+come from Jolpica.
 
 ## Key Patterns & Conventions
 
@@ -65,7 +61,6 @@ Streamlit's `st.navigation` doesn't natively collapse section groups. `app.py` u
 The Jolpica `/standings` endpoint returns season-to-date championship totals, not per-round points. So `driver_standings.points[round=4]` IS the total championship points after R4, not the points scored AT R4. **Don't `cumsum` on top of it** in charts that show progression — just plot it directly. (We hit this bug once on the Standings → Points Accumulation chart; Antonelli was reading 237 at R4 instead of his real 100.)
 
 ### Sprint points must be unioned everywhere totals are summed
-Already covered above for career stats, but worth restating for normalized-points work: `get_normalized_season_points` UNIONs `results` + `sprint_results` and applies the target points system to BOTH sets of finishing positions, so both the actual and normalized totals match official championship behaviour.
 
 ### Team-aware Head-to-Head colours
 `queries/drivers.py::get_latest_constructor(driver_id)` returns the constructor a driver most recently raced for. The H2H pages look up `TEAM_COLORS[<that id>]` and pass it through `season_comparison_bar`, `cumulative_wins_chart`, `h2h_qualifying_chart` as optional `d1_color` / `d2_color` kwargs. Falls back to the default red/blue palette if the team isn't in `TEAM_COLORS`.
@@ -92,7 +87,7 @@ F1's `TimingAppData.jsonStream` has two gotchas for tire/stint parsing (handled 
 2. **`LapNumber` in stint data is the fastest-lap number, not the stint start.** Stint boundaries are instead computed from `TotalLaps` (cumulative tire wear including pre-race laps from `StartLaps`). Stint length = `TotalLaps − StartLaps`. The first stint starts at lap 1; each subsequent stint starts at the prior stint's end + 1. `_stint_boundaries()` centralises this logic and both `get_stints` and `get_laps` use it.
 
 ### Live data is SignalR, not static files
-Discovered 2026-06-26 during Austrian GP P2. The static `.jsonStream` archive files are **not written during a live session** — F1's `SessionInfo.json` reports `ArchiveStatus: "Generating"` and every data topic returns **HTTP 403 `AccessDenied`** (the S3 key doesn't exist yet) until the session finishes and archives. So polling `livetiming.formula1.com/static/.../TimingData.jsonStream` can only ever serve a completed session's replay; during a live session it returns nothing and the page is blank. (It *looked* live in testing only because those sessions had already archived by the time we tested.)
+The static `.jsonStream` archive files are **not written during a live session** - they appear only after the session ends. Anything that reads them mid-session sees nothing.
 
 The genuinely-live feed is the **SignalR Core websocket** at `wss://livetiming.formula1.com/signalrcore`. Key facts:
 - **Auth.** F1 put the feed behind an F1TV-subscription token (`get_auth_token` launches an interactive OAuth flow). FastF1 ships a `no_auth=True` escape hatch but it's **broken in 3.8.3** — it passes `access_token_factory=None` where signalrcore requires a callable, raising `TypeError: access_token_factory is not function`. `data/f1_signalr.py::FreeSignalRClient` subclasses FastF1's client and passes `lambda: ""` instead. The core timing topics (TimingData, DriverList, TimingAppData, WeatherData, RaceControlMessages, ...) stream **without a valid token** — verified live. The legacy `/signalr` ASP.NET endpoint now 401s, so this is the only free path.
@@ -100,26 +95,10 @@ The genuinely-live feed is the **SignalR Core websocket** at `wss://livetiming.f
 - **The feed is global, not addressable.** It always streams whichever session is on track *now* — you can't ask it for a specific session. So `ensure_recording` is gated on `_is_live_now()` (strict on-track window), not the wider 12h static-archive window, or viewing this-morning's FP1 while P2 is live would capture P2's data under FP1's key. And recordings are **freshness-gated** by file mtime (`_STALE_AFTER_S`): a leftover file from an ended session is ignored so callers fall through to the now-complete static archive.
 - **Snapshot vs delta, and the Sectors list gotcha.** The Subscribe response sends a full-state snapshot (payload is a JSON *string*); subsequent messages are deltas (payload is a dict) with absolute ISO timestamps (`_parse_ts` handles both ISO and the static feed's session-relative format). Like Stints, **`Sectors` arrives as a list in the snapshot but an index-keyed dict in deltas** — `_normalize_timing_line()` converts the list form before merging so snapshot sector values survive and deltas update them in place.
 - On the very first render after a session goes live there's a ~2–5s lag while the recorder connects and the snapshot flushes; the page falls back to FastF1 (empty for a live session) for that one render, then the 10s auto-refresh picks up live data. Tests pin the parsing against a real captured P2 sample in `tests/fixtures/signalr_p2_sample.txt` (`tests/test_signalr.py`) — no network or threads.
-- **⚠️ Cloud status (CONFIRMED broken 2026-07-05).** Live SignalR is **verified working locally** (live P2, the live Austrian GP race, and a live session on 2026-07-05: recorder streams ~2 KB/s, all 22 drivers with live positions) but **cannot work on Streamlit Community Cloud** — Cloud blocks the outbound WebSocket entirely. The `Recorder —` diagnostic line on a live Cloud session reads **`ws connected: False · file: 0 bytes`** (thread alive, no `last_error`) — the handshake *never completes*, so `_is_connected` never flips and the recorder sits forever in its connect-wait loop. Note this **corrects the earlier guess** that Cloud let the handshake through and only dropped the data frames (`ws connected: True`); the socket doesn't even open. Nothing in the app can fix a network-layer block. Live-on-Cloud needs an **external recorder** (a small always-on worker — Fly.io / a VPS / a home box — that holds the WSS feed and pushes the recording to a store the Streamlit app reads), or run locally (`streamlit run app.py`) for a live session. The static-archive + FastF1 paths keep Cloud working for everything that isn't currently on track. See `project_notes.md` → Known Issues for the full write-up.
-- **✅ Production acceptance (2026-07-19, Belgian GP race).** First full live race on the Pi: the recorder connected within ~30s of the session going live and streamed the whole race (~4.6MB recorded, 19k+ interval rows, all 22 drivers, laps/stints/positions all flowing), and `compute_strike` ran against the live grid every 60s for ~1.5h with zero exceptions — real predictions with sensible confidence labels. **Known weakness found:** mid-race the websocket went *half-dead* — `ws_connected: True` but the recording file frozen — for ~5 min until the thread died and the next `ensure_recording` call revived it (~9 min total data outage, self-recovered). There is **no watchdog for a stalled-but-alive connection**: if the recording file mtime goes stale while the thread reports alive, the recorder should proactively kill and reconnect (candidate fix in `data/f1_signalr.py`). Race-day watcher tooling stays on the Pi for reuse: `/opt/f1-dashboard/watch_race.py`, launched as transient unit `f1-race-watch` (own `F1_LIVE_RECORDING_DIR` so it never shares a recording file with the app), JSONL log in `/opt/f1-dashboard/watch/`. Two minor data quirks also observed: the P2→P1 pair often lacks a computable gap ("No live gap data yet"), and the `position` topic lags `intervals` slightly so adjacent-pair pickers can be one spot stale.
+- **OPEN BUG - no watchdog for a stalled-but-alive connection.** Seen live: the websocket went *half-dead* (`ws_connected: True` but the recording file frozen) for ~5 min until the thread died and the next `ensure_recording` revived it - ~9 min of data outage, self-recovered. If the recording file mtime goes stale while the thread reports alive, the recorder should proactively kill and reconnect (candidate fix in `data/f1_signalr.py`). Race-day watcher tooling stays on the Pi for reuse: `/opt/f1-dashboard/watch_race.py`, launched as transient unit `f1-race-watch` with its own `F1_LIVE_RECORDING_DIR` so it never shares a recording file with the app; JSONL log in `/opt/f1-dashboard/watch/`. Two data quirks to expect: the P2-P1 pair often has no computable gap ("No live gap data yet"), and the `position` topic lags `intervals` slightly so adjacent-pair pickers can be one spot stale.
 
 ### Tire strategy chart ordering
 `charts/live_charts.py::stint_gantt` sorts drivers by finishing position (from the grid's `position` column) so the winner appears at the top. Falls back to `lap_end` sort when position isn't available.
-
-### Time-to-Strike formula
-Implemented in `queries/strike.py` as a pure function returning `StrikeResult`. The solver walks forward lap by lap, accumulating per-lap pace advantage until it covers the current gap:
-```
-catches on smallest k such that
-  Σ_{i=1..k} (target_pace_i − chaser_pace_i) >= gap_seconds
-where pace_i for each driver = base_pace + deg_slope * i
-```
-- `gap_seconds` = chaser's `gap_to_leader` − target's `gap_to_leader`
-- `base_pace` and `deg_slope` come from a linear fit on the last 5 clean laps (pit-out and outlier-slow laps stripped). With <3 clean laps the slope falls back to 0 and the math collapses to the old flat-pace `ceil(gap / Δpace)`.
-- Returns `None` (→ "can't close") when the cumulative advantage never covers the gap within 80 projected laps. This handles the case where current pace_delta is small but degradation closes the gap — and the inverse, where the chaser is currently faster but is degrading harder.
-
-Confidence label (high/medium/low) is heuristic from pace-delta magnitude, lap-time stdev, tire-age delta, **deg-slope gap** (target degrading faster widens the window), and close proximity (sub-second gaps). The function fills `result.notes[]` so the UI can show *why* a verdict was given.
-
-**2026 reg note:** DRS no longer exists; overtaking uses manual override mode (electrical boost) plus active aero. There's no "within 1 second" technical trigger anymore, but a sub-second gap still indicates "overtake imminent" because slipstream + override windows favour the chaser at that range. The constant in `strike.py` is named `PROXIMITY_THRESHOLD_S`, not the legacy `DRS_THRESHOLD_S`.
 
 ## Theme
 Pitwall — broadcast-style dark. F1 red (#E10600) on near-black (#0A0B0F).
@@ -150,66 +129,17 @@ The Mon refresh catches Sunday race results once they've settled. The Wed refres
 The Live Race page shows a stale-data warning if the most-recent race in the DB is more than 14 days old.
 
 ### Stale-deploy ImportError pattern (historical — Streamlit Cloud only)
-No longer applies now that we self-host: on Streamlit Cloud a page could fail on the cloud with `ImportError` while importing cleanly locally, because Cloud cached a partial deploy (new page code referencing a name the *old* helper module lacked); the fix was rebooting from share.streamlit.io. On the Pi, `f1-dashboard-update.timer` git-pulls a whole commit atomically and restarts the process, so there's no partial-deploy state. If the app misbehaves after an update, check `journalctl -u f1-dashboard` and `systemctl restart f1-dashboard`.
+Self-hosted now, so the old Streamlit Cloud stale-deploy ImportError pattern no longer applies. For deploy problems use `journalctl -u f1-dashboard` and `systemctl restart f1-dashboard`.
 
 ## Page → File Map
-The sidebar labels and page titles don't always match the file names because we've renamed pages without renumbering the files:
 
-| Sidebar / URL                | File                                  |
-|------------------------------|---------------------------------------|
-| Live Session (default)       | pages/14_Live_Race.py                 |
-| Standings                    | pages/1_Season_Tracker.py             |
-| Race Calendar                | pages/9_Race_Calendar.py              |
-| Race Breakdown               | pages/2_Race_Breakdown.py             |
-| Sprint Analysis              | pages/11_Sprint_Analysis.py           |
-| Championship Momentum        | pages/16_Championship_Momentum.py     |
-| Driver Profiles (current)    | pages/6_Driver_Profiles.py            |
-| Head-to-Head (current)       | pages/3_Head_to_Head.py               |
-| Circuit Map                  | pages/5_Circuit_Map.py                |
-| What-If Simulator            | pages/8_What_If.py                    |
-| Historical Driver Profiles   | pages/18_Driver_Profiles_Historical.py|
-| Historical Head-to-Head      | pages/19_Head_to_Head_Historical.py   |
-| Era Comparison               | pages/4_Historical.py                 |
-| Pit Stop Records             | pages/15_Pit_Stop_Records.py          |
-| Lap Time Evolution           | pages/17_Lap_Time_Evolution.py        |
-| Load Data                    | pages/0_Load_Data.py                  |
-
-The numeric prefixes on the files no longer affect routing or order — `app.py`'s `GROUPS` dict is the single source of truth. The numbers are kept for compatibility / file-tree readability.
+`app.py`'s `GROUPS` dict is the single source of truth for routing - read it rather than a
+table here. Two things it will not tell you: sidebar **labels are not filenames**, and the
+numeric prefixes on page files **do not route**.
 
 ## Drivers split: current vs historical
 - **Drivers** group in the nav: filtered to the most-recent season's grid via `queries/drivers.py::get_current_drivers()`.
 - **Records & History** group: full archive via `get_all_drivers()`. Same rendering, different filter.
-
-## Live Session page conventions
-
-The page (`pages/14_Live_Race.py`, sidebar label "Live Session") works for any session type — practice, qualifying, sprint, race — so there's live or recent data every day of a weekend. `_is_race_session(sess)` classifies Race/Sprint as the only sessions where **Time-to-Strike** is meaningful (its gap-closing model assumes on-track running order). For other sessions the widget stays usable for data inspection but renders an `st.info` note that the verdict isn't a real overtake prediction.
-
-### Standings position = classification, not last lap
-`get_position` is a per-lap time series, so the *last* row for a retired driver is frozen at the on-track position they held when they stopped — a car that drops out while running P2 stayed "P2" in the standings forever, duplicating whoever's really P2 (hit 2026-06-22: Antonelli showed P2 in the Spain GP despite a mid-race DNF). The fix is `get_classification(session_key)` — authoritative running order with retirements sorted to the back: FastF1's `session.results` (`Position` + `Status`) for completed sessions, the live feed's `Retired`/`Stopped` flags (re-ranked, since F1 leaves the retired car's last position in the feed) for live ones. `build_live_grid(..., classification_df)` prefers it for the `position` column, blanks `gap_to_leader`/`interval` for retired drivers, and the page shows their Gap as "DNF". Falls back to lap-derived `get_position` only when no classification exists yet (early in a live session before FastF1 ingests). `_is_finisher_status` treats `Finished`/`Lapped`/`+N Lap` as classified, everything else as retired.
-
-### Live session detection
-FastF1's schedule doesn't expose session end times (`date_end == date_start`). `pages/14_Live_Race.py::_is_live(sess)` estimates duration from a `_SESSION_DURATIONS` dict (Race = 3h, Qualifying/Practice = 1.5h, Sprint = 1.5h) and checks `date_start <= now <= date_start + duration`. Used to:
-- Show a red "LIVE" badge in the header
-- Default the auto-refresh checkbox to ON
-- Pre-select the 10s refresh interval (vs 15s for archived sessions)
-
-`_time_since_end(sess)` uses the same estimated end time for "ended 2h ago" / "ended 3d ago" suffixes.
-
-### Sector colours on standings
-S1/S2/S3 columns coloured via pandas `Styler.apply`:
-- Purple (`rgba(139, 92, 246, 0.45)`) = session-best for that sector
-- Green (`rgba(34, 197, 94, 0.35)`) = personal-best for that driver/sector
-- Default = no colour
-
-Bests are computed once from the full `laps` frame: session-best is `laps["duration_sector_N"].min()`, personal-best is per-driver `min()`. Comparisons round to 3dp because the live timing source sometimes returns extra trailing precision.
-
-### Standings table + click-to-fill
-The main standings table is rendered with pandas `Styler` (sector colours) **without** `selection_mode`, because Streamlit strips Styler backgrounds when selection is active. Click-to-fill for Time-to-Strike lives in a separate expander below the styled table, using a minimal `st.dataframe` with `selection_mode="single-row"` + `on_select="rerun"`. Clicking a row there populates the chaser picker and defaults the target to whoever is one position ahead. The selectboxes still allow override.
-
-The Time-to-Strike block rebuilds the selectbox `key` based on the clicked row index — this forces Streamlit to re-render with the new default rather than keeping the user's previous selection sticky.
-
-### Position movement strip
-"Up: VER +3 (P12→P9)" / "Down: ALO -2 (P5→P7)" computed over the last 5 minutes of `position` events. Uses the data's own max timestamp as "now" rather than wall-clock time so the widget works on archived sessions too. Empty when nothing has changed in the window.
 
 ## Development & CI
 - **Tests:** `pytest` (config in `pyproject.toml`, `testpaths = ["tests"]`). Suite covers the sprint-points invariant (incl. `what_if.get_season_results` and `historical.get_normalized_season_points`), the Time-to-Strike solver, the Jolpica fetcher pagination, and the live-client parsing (`_parse_gap`, `_normalize_stints`, `_stint_boundaries`, `get_classification` retired-driver reorder), and the SignalR live path (`tests/test_signalr.py`: record parsing, snapshot-vs-delta, freshness gating, ISO-timestamp parsing, and full replay through the shaping functions against a real captured P2 sample). The live client's pure helpers are tested by monkeypatching `_fetch_stream` — no network needed.
@@ -229,11 +159,6 @@ The Time-to-Strike block rebuilds the selectbox `key` based on the clicked row i
 - Don't drop the `legendgroup` / `legendgrouptitle_text` from multi-driver charts — they keep teammates grouped in the legend
 - Don't switch to `hovermode="x unified"` on the Standings charts — 22 drivers don't fit; we use the driver+teammate model instead
 
-## Future ideas (not started)
-- **Live track map** — driver dots on the racing line via FastF1's `session.pos_data`. Phased plan in `project_notes.md`.
-- Pit-window predictor (best lap to pit given tire age + traffic)
-- Undercut/overcut calculator
-- Equal-area projection for track outlines (Mercator-squash at high latitude)
-- Per-circuit rotation table to match F1.com's stylized track diagrams
-- Accurate start/finish marker on track outlines (bacinger GeoJSON doesn't encode the line — would need hand-curated index per circuit or FastF1 position data)
-- Team radio playback — FastF1 doesn't expose team radio directly; would need to scrape F1's audio archive or wait for FastF1 to add it
+## Future ideas
+
+Tracked in `FUTURE.md`. This section used to restate it near-verbatim; it no longer does.
