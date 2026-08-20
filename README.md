@@ -65,14 +65,19 @@ A "closest battles" leaderboard runs the same calculation across every adjacent 
 
 ## Architecture
 
-Three layers, each with one job:
+Layered, each with one job:
 
 ```
 data/      raw fetch + persistence (Jolpica REST + FastF1 live + GeoJSON)
 queries/   pure SQL/compute helpers — no Streamlit, no I/O beyond the DB
 charts/    Plotly figure builders — no I/O at all, take DataFrames in, return Figures out
+views/     shared page renderers used by more than one page
 pages/     Streamlit views — orchestrate queries + charts, handle UI state
 ```
+
+`views/` holds renderers shared across pages — `views/driver_profile.py` backs both Driver
+Profiles and Historical Driver Profiles, and `views/head_to_head.py` backs both Head-to-Head
+and Historical Head-to-Head, each called with a different driver list and title.
 
 Two distinct data feeds live in `data/`:
 
@@ -98,15 +103,15 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The repository ships with a populated `f1_data.db` (~1.1 MB) so the dashboard works immediately on a fresh checkout. To rebuild from scratch (e.g. to pull a fresh season locally), open **Settings → Load Data** in the sidebar.
+The repository ships with a populated `f1_data.db` so the dashboard works immediately on a fresh checkout. To rebuild from scratch (e.g. to pull a fresh season locally), open **Settings → Load Data** in the sidebar.
 
 ## Deployment
 
 Self-hosted on a Raspberry Pi and served publicly over a Cloudflare Tunnel — moved off Streamlit Community Cloud because Cloud blocks the outbound WebSocket the live SignalR feed needs (the live feature only works with open egress). The app runs as a resource-capped `systemd` service; a timer pulls `main` every ~30 minutes and restarts on change. Full runbook and unit files in [`deploy/`](deploy/pi-setup.md).
 
-A GitHub Action (`.github/workflows/refresh-data.yml`) runs Mondays and Wednesdays at 06:00 UTC, refreshes the current season's data, and pushes any DB changes back to `main` — which the Pi's update timer then pulls. The Mon run catches Sunday race results once they settle; the Wed run catches mid-week steward decisions and post-race penalty changes that retroactively shift positions.
+A GitHub Action (`.github/workflows/refresh-data.yml`) runs Mondays and Wednesdays at 06:13 UTC (deliberately off the hour — see CLAUDE.md), refreshes the current season's data, and pushes any DB changes back to `main` — which the Pi's update timer then pulls. The Mon run catches Sunday race results once they settle; the Wed run catches mid-week steward decisions and post-race penalty changes that retroactively shift positions.
 
-The Live Race page surfaces a "data may be stale" warning if the most-recent race in the DB is more than 14 days old.
+The Live Race page surfaces a "data may be stale" warning when a completed race is missing from the DB (`queries/standings.py::get_missing_completed_races()`), not on a day-count threshold.
 
 ## Project structure
 
@@ -119,7 +124,7 @@ f1_data.db          SQLite (committed) — historical F1 data
 .streamlit/
   config.toml       Pitwall theme palette
 .github/workflows/
-  refresh-data.yml  Auto-refresh data Mon/Wed 06:00 UTC
+  refresh-data.yml  Auto-refresh data Mon/Wed 06:13 UTC
 
 db/
   connection.py     SQLite context manager (WAL mode, foreign keys on)
@@ -141,12 +146,20 @@ queries/
   historical.py     Records, momentum, lap evolution
   circuits.py       Circuit data and race history
   strike.py         Time-to-Strike compute (pure, framework-free)
+  sprint.py         Sprint Analysis queries — sprint-only leaderboard
+  what_if.py        What-If Simulator queries — season results, standings recalculation
 
 charts/
   season_charts.py     Position progression, points accumulation
   race_charts.py       Grid vs finish, gap-to-fastest, stacked pit stops
   comparison_charts.py H2H bars, cumulative wins, radar charts
   live_charts.py       Stint Gantt, pace trace, gap evolution
+  sprint_charts.py     Sprint points leaderboard, sprint-vs-race comparison
+  what_if_charts.py    Standings comparison, position-change bars
+
+views/
+  driver_profile.py    Shared renderer for Driver Profiles + Historical Driver Profiles
+  head_to_head.py      Shared renderer for Head-to-Head + Historical Head-to-Head
 
 pages/              16 Streamlit pages
 ```

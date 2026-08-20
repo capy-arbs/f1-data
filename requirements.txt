@@ -1,6 +1,7 @@
-# Runtime deps. Upper bounds pin to the next major so Streamlit Cloud (which
-# resolves fresh on every deploy, with no lockfile) can't silently pull a
-# breaking major. Bump the caps deliberately after testing a new major locally.
+# Runtime deps. Upper bounds pin to the next major so the Pi's
+# f1-dashboard-update.timer (which resolves fresh on every pull, with no
+# lockfile) can't silently pull a breaking major. Bump the caps deliberately
+# after testing a new major locally.
 streamlit>=1.30.0,<2.0.0
 plotly>=5.18.0,<7.0.0
 requests>=2.31.0,<3.0.0

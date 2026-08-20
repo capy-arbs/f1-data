@@ -71,13 +71,13 @@ The auto-refresh GitHub Action also pushes commits as `f1-data-refresh-bot` on M
 
 The action calls `load_season(conn, current_year)`, which uses `INSERT OR IGNORE` for existing rows so re-runs are idempotent — only new races and changed standings get added.
 
-The Home/Live Race page shows a "data may be stale" warning if the most-recent race in the DB is more than 14 days old.
+The Home/Live Race page shows a "data may be stale" warning when a completed race is missing from the DB, not on a day-count threshold — see `queries/standings.py::get_missing_completed_races()` and `pages/14_Live_Race.py::_freshness_banner()`.
 
 ## Tech Stack
 - **Python 3.10+** (3.11 in CI via `actions/setup-python@v5`)
 - **Streamlit 1.30+** (1.56 confirmed in dev) — multi-page app via `st.navigation`
 - **Plotly** — every chart, with a monkey-patched modebar so reset-axes is always visible
-- **SQLite** — local file `f1_data.db` (~1.1MB), shipped in the repo
+- **SQLite** — local file `f1_data.db`, shipped in the repo, grows with each refresh commit
 - **Pandas** — DataFrame work everywhere
 - **Requests** — HTTP for both data feeds
 - **NumPy** — explicit dependency for `queries/strike.py`'s linear-fit pace solver
@@ -144,10 +144,10 @@ Sidebar groups (defined in app.py):
 app.py                         Entry point — page config, theme CSS, custom nav, plotly modebar patch
 config.py                      API URLs, team colors (incl. Audi/Cadillac for 2026), point systems
 requirements.txt               streamlit, plotly, requests, pandas, numpy
-f1_data.db                     SQLite (committed, ~1.1MB) — full seasons for the loaded years + all-time race winners 1950–2026
+f1_data.db                     SQLite (committed) — full seasons for the loaded years + all-time race winners 1950–2026, grows with each refresh commit
 
 .streamlit/config.toml         Pitwall theme palette (F1 red on near-black)
-.github/workflows/refresh-data.yml   Mon/Wed 06:00 UTC auto-refresh
+.github/workflows/refresh-data.yml   Mon/Wed 06:13 UTC auto-refresh
 
 db/
   connection.py                SQLite context manager (WAL mode, foreign keys on)
@@ -167,12 +167,16 @@ queries/
   historical.py                Records, normalized stats, momentum, lap evolution; sprint-aware
   circuits.py                  Circuit data and race history
   strike.py                    Time-to-Strike compute (pure, framework-free)
+  sprint.py                    Sprint Analysis queries — sprint-only leaderboard
+  what_if.py                   What-If Simulator queries — season results, standings recalculation
 
 charts/
   season_charts.py             Position progression, points accumulation; team-grouped hovers
   race_charts.py               Grid vs finish, gap-to-fastest, stacked pit stops with outlier filter
   comparison_charts.py         H2H bars, cumulative wins, radar charts
   live_charts.py               Stint Gantt, pace trace, gap evolution
+  sprint_charts.py             Sprint points leaderboard, sprint-vs-race comparison
+  what_if_charts.py            Standings comparison, position-change bars
 
 views/
   driver_profile.py            Shared renderer for Driver Profiles + Historical Driver Profiles

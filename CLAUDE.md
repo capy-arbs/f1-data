@@ -8,9 +8,12 @@ Live at https://boxbox.playastrova.com — self-hosted on a Raspberry Pi behind 
 ## Architecture
 
 Layered: pages stay thin; `queries/` owns SQL, `charts/` owns figures, `data/` owns fetching
-and caching. **Inline SQL or chart-building inside a page is a smell — push it down a layer.**
-Directory listing and the data-source rundown are in `README.md`; the deployment picture is in
-`project_notes.md`.
+and caching, `views/` holds shared page renderers used by more than one page (e.g. Driver
+Profiles and Historical Driver Profiles both call into `views/driver_profile.py` with different
+driver lists + titles). **Inline SQL or chart-building inside a page is a smell — push it down a
+layer.** Directory listing and the data-source rundown are in `README.md`; the deployment picture
+is in `project_notes.md`; page-specific conventions (Live Session page, Time-to-Strike formula)
+are in `docs/REFERENCE.md`.
 
 **Three timing sources, and which one applies depends on when the session is:**
 
@@ -55,7 +58,7 @@ Drop NaN dates before any time-series merge. Used in `gap_evolution_chart`.
 Streamlit's `st.navigation` doesn't natively collapse section groups. `app.py` uses `position="hidden"` to keep it as a router only, then renders the sidebar manually with `st.expander` per group. CSS in `app.py` hides Streamlit's auto-generated nav (`[data-testid="stSidebarNav"] { display: none }`).
 
 ### Plotly modebar is monkey-patched
-`app.py` patches `st.plotly_chart` so every chart gets `displayModeBar=True` and `displaylogo=False` without touching the 37 individual call sites.
+`app.py` patches `st.plotly_chart` so every chart gets `displayModeBar=True` and `displaylogo=False` without touching the individual call sites.
 
 ### `driver_standings.points` is already cumulative
 The Jolpica `/standings` endpoint returns season-to-date championship totals, not per-round points. So `driver_standings.points[round=4]` IS the total championship points after R4, not the points scored AT R4. **Don't `cumsum` on top of it** in charts that show progression — just plot it directly.
@@ -95,7 +98,7 @@ Pitwall — broadcast-style dark. F1 red (#E10600) on near-black (#0A0B0F).
 - Custom CSS in `app.py` for typography, sidebar gradient, metric-card styling, table borders
 - Per-chart `hoverlabel` styling so tooltips match the theme
 - Compound colors (Pirelli) defined in `charts/live_charts.py::COMPOUND_COLOURS`
-- Semantic delta colours in `config.py`: `COLOR_POSITIVE` (green, gained), `COLOR_NEGATIVE` (red, lost), `COLOR_NEUTRAL`. Use these for gain/loss bars rather than re-hardcoding `#22c55e`/`#ef4444` (they're still hardcoded in a few older charts — migrate when touched)
+- Semantic delta colours in `config.py`: `COLOR_POSITIVE` (green, gained), `COLOR_NEGATIVE` (red, lost), `COLOR_NEUTRAL`. Use these for gain/loss bars rather than re-hardcoding `#22c55e`/`#ef4444` (still hardcoded in `charts/race_charts.py` — migrate when touched)
 
 Page titles get an automatic red underline via the `h1` CSS rule. Section subheaders are uppercased small caps. Metric values render in monospace for that timing-board feel.
 
@@ -105,7 +108,7 @@ Self-hosted on the **astrova Raspberry Pi**, public at **https://boxbox.playastr
 - **App service:** `systemd` unit `f1-dashboard.service` runs `streamlit run app.py` on `0.0.0.0:8501`. Unit files + runbook committed in `deploy/` (`deploy/pi-setup.md`). Deploy problems: `journalctl -u f1-dashboard`, `systemctl restart f1-dashboard`.
 - **Deploy on push:** `f1-dashboard-update.timer` pulls `main` every ~30 min and, only if HEAD moved, pip-installs + restarts the app (f1dash restarts it via a narrow sudoers rule). So `git push` still ≈ deploys, just on a ≤30-min lag instead of instant. Private admin view over the tailnet: `http://astrova-pi:8501`.
 - **Single branch** workflow: push to `main`. **Public repo** on GitHub.
-- **Database is committed** (`f1_data.db`, ~1.1MB) so a fresh clone ships with full historical data immediately.
+- **Database is committed** (`f1_data.db`) so a fresh clone ships with full historical data immediately. Size grows with each weekly refresh commit — check `ls -lh f1_data.db` for the current figure rather than trusting a number here.
 - **Don't move to a platform host without checking WebSocket egress.** Streamlit Cloud is retired — it blocked the outbound SignalR socket at the network layer (post-mortem in `project_notes.md`). `.streamlit/config.toml` (theme) and the `streamlit` dep still matter; the Cloud platform doesn't.
 
 ### Auto-refresh action
@@ -113,7 +116,7 @@ Self-hosted on the **astrova Raspberry Pi**, public at **https://boxbox.playastr
 
 The Mon refresh catches Sunday race results once they've settled. The Wed refresh catches mid-week steward decisions, DSQs, post-race penalty changes that retroactively shift positions.
 
-The Live Race page shows a stale-data warning if the most-recent race in the DB is more than 14 days old.
+The Live Race page shows a stale-data warning when a completed race is missing from the DB — `queries/standings.py::get_missing_completed_races()` finds races in the current season whose date has passed but that have no rows in `results`, and `pages/14_Live_Race.py::_freshness_banner()` renders the warning listing them. Not a day-count check — a calendar gap between races (e.g. the summer break) doesn't trigger it.
 
 ## Page → File Map
 

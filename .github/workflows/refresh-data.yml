@@ -2,7 +2,8 @@ name: Refresh F1 data
 
 # Pulls fresh race results, qualifying, sprints, pit stops, and standings
 # from the Jolpica API for the current season, commits any changes to
-# f1_data.db, and pushes — which triggers Streamlit Cloud to redeploy.
+# f1_data.db, and pushes — which the Pi's f1-dashboard-update.timer picks up
+# and pulls within ~30 min, restarting the app.
 #
 # Schedule:
 #   - Monday 06:13 UTC: catches Sunday race results once they've settled.
