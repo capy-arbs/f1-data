@@ -11,7 +11,7 @@ Branch: `main` (single branch — the Pi's update timer pulls every ~30 min)
 
 ## Hosting / Infrastructure
 Self-hosted since 2026-07-08 (moved off Streamlit Community Cloud — Cloud blocks the outbound SignalR WebSocket the live feed needs; see Known Issues). Full runbook: `deploy/pi-setup.md`.
-- **Host** — astrova Raspberry Pi (Pi 4, 8GB, Debian 13, aarch64). `ssh root@astrova-pi` over the tailnet (Tailscale SSH; ACL blocks the `capybearhug` user). App runs as user `f1dash` from `/opt/f1-dashboard`.
+- **Host** — astrova Raspberry Pi (Pi 4, 8GB, Debian 13, aarch64) over the tailnet (Tailscale SSH — which user can SSH depends on the ACL; verify against the Tailscale admin page rather than copying a command, per the global CLAUDE.md; an old note here said "root, because the ACL blocks `capybearhug`" — that account no longer exists post-rename). App runs as user `f1dash` from `/opt/f1-dashboard`.
 - **App service** — `systemd` unit `f1-dashboard.service` (`streamlit run app.py` on `0.0.0.0:8501`), capped `CPUQuota=200%` + `MemoryMax=1500M` so the co-located astrova game always wins.
 - **Public URL** — a 2nd ingress rule on the game's existing Cloudflare Tunnel `astrova-mp` routes `boxbox.playastrova.com → localhost:8501`. One `cloudflared`, two hostnames, $0. No open inbound ports; the tunnel is the only public path.
 - **Deploy on push** — `f1-dashboard-update.timer` pulls `main` every ~30 min and restarts on change (f1dash restarts via a narrow sudoers rule). Private admin view over tailnet: `http://astrova-pi:8501`.
@@ -304,3 +304,14 @@ Pitwall — broadcast-style dark mode. F1 red (#E10600) accent on near-black (#0
 - Python via system `python3` (~3.12)
 - Local `f1_data.db` shared with the deployed copy (committed in repo)
 - Single GitHub account (`capy-arbs`); deploy is on the same account's Streamlit Cloud login
+
+## Resolved-bug history (moved out of CLAUDE.md, 2026-08-19)
+
+Dated incident narratives relocated here during the machine-wide CLAUDE.md hygiene pass; the constraints they produced stay in CLAUDE.md.
+
+- **2026-05-23 sprint-points audit** caught three lingering UNION violations, since fixed: `queries/drivers.py::get_head_to_head`, `queries/drivers.py::get_teammate_seasons`, `pages/8_What_If.py::get_season_results`.
+- **2026-07-07 Circuit Explorer slice bug:** deriving all-time circuit stats from loaded seasons made Spa show 11 races with Verstappen top winner (real: 58 races, Schumacher 6). Led to the `circuit_race_winners` complete-archive design.
+- **2026-05-07 Jolpica pagination bug:** the silent limit=100 cap made every 2022-2025 season stick at ~5 rounds of results/qualifying/sprint_results because the offset loop quit early. Led to the clamp + served-limit offset advance in `data/fetcher.py::_get`.
+- **Standings cumsum bug** (Points Accumulation chart): `driver_standings.points` is already cumulative; double-cumsum showed Antonelli reading 237 at R4 instead of his real 100.
+- The old "Stale-deploy ImportError pattern" section applied to Streamlit Cloud only and was deleted outright (self-hosted now; use `journalctl -u f1-dashboard`).
+- The 2026-07-19 Belgian GP production-acceptance run and the Streamlit Cloud egress post-mortem were already recorded above in this file; CLAUDE.md now just points here.
