@@ -2,7 +2,10 @@
 # f1-dashboard-update.timer (which resolves fresh on every pull, with no
 # lockfile) can't silently pull a breaking major. Bump the caps deliberately
 # after testing a new major locally.
-streamlit>=1.30.0,<2.0.0
+# The Live Session page needs st.fragment(run_every=...), stable since 1.37.
+# Floor is 1.41 because that is the oldest release actually exercised against
+# the page (1.37's pinned pillow won't build on current Python).
+streamlit>=1.41.0,<2.0.0
 plotly>=5.18.0,<7.0.0
 requests>=2.31.0,<3.0.0
 pandas>=2.1.0,<3.0.0

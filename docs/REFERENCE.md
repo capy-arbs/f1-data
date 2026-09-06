@@ -18,6 +18,22 @@ FastF1's schedule doesn't expose session end times (`date_end == date_start`). `
 
 `_time_since_end(sess)` uses the same estimated end time for "ended 2h ago" / "ended 3d ago" suffixes.
 
+### Refresh is a fragment, never a sleep
+Everything below the sidebar lives in `_render_live()`, decorated
+`@st.fragment(run_every=interval if auto_refresh else None)`. The decorator is
+re-evaluated on each full script run, which is how the sidebar's interval slider
+and Auto-refresh checkbox reach it.
+
+**Do not go back to `time.sleep(interval)` + `st.rerun()` at the bottom of the
+page.** That sleeps *inside* the script run, so the script is never idle:
+Streamlit fades stale elements for the whole of a run, which dimmed the page
+~100% of the time (it read as permanently loading), tore down and rebuilt every
+chart each tick, and made widget clicks queue behind the sleep. The fragment
+reruns only its own block, so the page stays settled and interactive between
+ticks. The fragment clears `_REFRESH_FNS` on entry when auto-refresh is on,
+which is what bypasses the fetchers' TTLs — the old loop did this after
+rendering, just before its rerun.
+
 ### Sector colours on standings
 S1/S2/S3 columns coloured via pandas `Styler.apply`:
 - Purple (`rgba(139, 92, 246, 0.45)`) = session-best for that sector
