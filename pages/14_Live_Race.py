@@ -447,7 +447,7 @@ else:
         latest_ts = positions["date"].max()
         cutoff = latest_ts - pd.Timedelta(minutes=5)
         latest_pos = (
-            positions.sort_values("date")
+            positions.sort_values("date", na_position="first")  # NaT = snapshot = oldest
             .groupby("driver_number").tail(1)
             .set_index("driver_number")["position"]
         )

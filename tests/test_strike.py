@@ -214,6 +214,27 @@ class TestGapBetween:
     def test_empty_frame_returns_none(self):
         assert _gap_between(pd.DataFrame(), chaser=1, target=4) is None
 
+    def test_untimestamped_snapshot_row_does_not_win_as_latest(self):
+        """Regression: the SignalR snapshot has no timestamp, so its date is NaT.
+
+        pandas sorts NaT last by default, which made .tail(1) pick the snapshot
+        for every driver — freezing the live gap at its connect-time value for
+        the rest of the session. The snapshot is the oldest state in the stream,
+        so it must sort first.
+        """
+        df = pd.DataFrame(
+            [
+                # Connect-time snapshot: chaser was 1.0s behind the target.
+                (4, 9.0, pd.NaT),
+                (1, 8.0, pd.NaT),
+                # Deltas since: the real gap has opened out to 7.0s.
+                (4, 15.0, pd.Timestamp("2026-05-22T13:20:00")),
+                (1, 8.0, pd.Timestamp("2026-05-22T13:20:01")),
+            ],
+            columns=["driver_number", "gap_to_leader", "date"],
+        )
+        assert _gap_between(df, chaser=4, target=1) == pytest.approx(7.0)
+
 
 # -- compute_strike: end-to-end smoke --------------------------------
 

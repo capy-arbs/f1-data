@@ -202,7 +202,10 @@ def _gap_between(intervals_df: pd.DataFrame, chaser: int, target: int) -> float 
         return None
 
     latest = (
-        intervals_df.sort_values("date")
+        # NaT dates are the untimestamped SignalR snapshot, i.e. the oldest state
+        # in the stream; they must sort first or they win .tail(1) and pin the gap
+        # to its connect-time value for the rest of the session.
+        intervals_df.sort_values("date", na_position="first")
         .groupby("driver_number", as_index=False)
         .tail(1)
     )

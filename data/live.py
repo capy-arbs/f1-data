@@ -806,8 +806,12 @@ def latest_intervals(intervals_df: pd.DataFrame) -> pd.DataFrame:
     """Reduce the intervals time-series to the most recent row per driver."""
     if intervals_df.empty:
         return intervals_df
+    # The SignalR snapshot record carries no timestamp (``_parse_ts("")`` -> NaT),
+    # and it is the *oldest* state in the stream — every delta after it supersedes
+    # it. pandas sorts NaT last by default, so without na_position="first" the
+    # snapshot wins .tail(1) and every live value freezes at connect time.
     return (
-        intervals_df.sort_values("date")
+        intervals_df.sort_values("date", na_position="first")
         .groupby("driver_number", as_index=False)
         .tail(1)
         .reset_index(drop=True)
@@ -819,7 +823,7 @@ def latest_positions(position_df: pd.DataFrame) -> pd.DataFrame:
     if position_df.empty:
         return position_df
     return (
-        position_df.sort_values("date")
+        position_df.sort_values("date", na_position="first")  # NaT = snapshot = oldest
         .groupby("driver_number", as_index=False)
         .tail(1)
         .reset_index(drop=True)
